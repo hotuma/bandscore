@@ -1,0 +1,23 @@
+# env（絶対に公開しない）
+.env
+.env.*
+!.env.example
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+dist/
+
+# Python
+__pycache__/
+.venv/
+venv/
+
+# logs / temp
+*.log
+temp/
+
+# IDE
+.vscode/
+.idea/
