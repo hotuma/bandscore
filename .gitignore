@@ -21,3 +21,8 @@ temp/
 # IDE
 .vscode/
 .idea/
+
+# test / local files
+*.mp3
+*.xlsx
+*.txt
