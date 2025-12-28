@@ -26,3 +26,7 @@ temp/
 *.mp3
 *.xlsx
 *.txt
+
+# binaries (do not commit)
+backend/bin/
+*.exe
