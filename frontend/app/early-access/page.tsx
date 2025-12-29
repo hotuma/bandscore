@@ -252,6 +252,11 @@ export default function EarlyAccessPage() {
             return;
         }
 
+        if (!process.env.NEXT_PUBLIC_API_BASE_URL) {
+            setError({ code: 'CONFIG_ERROR', message: 'Configuration Error: API Base URL not set.' });
+            return;
+        }
+
         setStatus('analyzing');
         setError(null);
 
@@ -260,8 +265,11 @@ export default function EarlyAccessPage() {
 
         try {
             // Connect to Backend
-            const base = process.env.NEXT_PUBLIC_API_BASE_URL!;
-            const res = await fetch(`${base}/analyze`, {
+            const base = process.env.NEXT_PUBLIC_API_BASE_URL;
+            const url = `${base}/analyze`;
+            console.log("Analyzing at:", url);
+
+            const res = await fetch(url, {
                 method: 'POST',
                 body: formData,
             });
@@ -585,7 +593,7 @@ export default function EarlyAccessPage() {
                 {status === 'analyzing' && (
                     <div className="text-center py-12 animate-pulse space-y-4">
                         <div className="inline-block w-12 h-12 border-4 border-teal-500 border-t-transparent rounded-full animate-spin"></div>
-                        <p className="text-teal-400 font-medium">Analyzing audio... secure connection (localhost)</p>
+                        <p className="text-teal-400 font-medium">Analyzing audio...</p>
                     </div>
                 )}
 

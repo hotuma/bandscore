@@ -39,12 +39,16 @@ app.mount("/temp", StaticFiles(directory=TEMP_DIR), name="temp")
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
+    # allow_origins list for exact matches
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:3001",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:3001",
+        "https://bandscore.vercel.app",
     ],
+    # Regex for Vercel preview URLs (bandscore-*.vercel.app)
+    allow_origin_regex=r"https://bandscore-.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
