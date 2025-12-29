@@ -260,7 +260,8 @@ export default function EarlyAccessPage() {
 
         try {
             // Connect to Backend
-            const res = await fetch('http://localhost:8000/analyze', {
+            const base = process.env.NEXT_PUBLIC_API_BASE_URL!;
+            const res = await fetch(`${base}/analyze`, {
                 method: 'POST',
                 body: formData,
             });
