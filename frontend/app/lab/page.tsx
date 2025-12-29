@@ -5,7 +5,10 @@ import FileUpload from '../../components/FileUpload';
 import ResultDisplay from '../../components/ResultDisplay';
 import { analyzeAudio, analyzeYoutube, AnalysisResult } from '../../lib/api';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
+if (!API_BASE_URL) {
+    throw new Error("NEXT_PUBLIC_API_BASE_URL is not set");
+}
 
 // Note: For client components, we can't export metadata directly in the same file if we want it to work easily 
 // with the simplified 'use client' pattern sometimes, but in App Router 'use client' pages can't export metadata.
