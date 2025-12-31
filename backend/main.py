@@ -584,13 +584,29 @@ def analyze_audio_file(file_path: str) -> dict:
 def read_root():
     return {"message": "BandScore API is running"}
 
+@app.post("/ping")
+async def ping():
+    return {"ok": True}
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
+@app.get("/version")
+def version():
+    return {"git_sha": os.getenv("RENDER_GIT_COMMIT", "unknown")}
+
+# --- DUMMY IMPLEMENTATION FOR CONNECTIVITY CHECK ---
 @app.post("/analyze")
-@app.post("/analyze")
-async def analyze_audio(file: UploadFile = File(...)):
+async def analyze(file: UploadFile = File(...)):
+    return {
+        "chords": [{"name":"C","startSec":0,"endSec":2}],
+        "meta": {"bpm": 120, "key": "C", "durationSec": 2}
+    }
+
+# --- REAL IMPLEMENTATION (TEMPORARILY DISABLED) ---
+# @app.post("/analyze")
+async def _analyze_audio_real(file: UploadFile = File(...)):
     # 1. Validate File Size
     # UploadFile.file is a SpooledTemporaryFile. We can check size.
     file.file.seek(0, os.SEEK_END)
