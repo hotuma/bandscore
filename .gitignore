@@ -31,3 +31,4 @@ temp/
 backend/bin/
 *.exe
 !backend/requirements.txt
+!backend/runtime.txt
