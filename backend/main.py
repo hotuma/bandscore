@@ -2,9 +2,6 @@ import os
 
 import psutil
 
-# Set Numba cache to temp dir to avoid read-only FS issues and ensure freshness
-os.environ.setdefault("NUMBA_CACHE_DIR", os.path.join(os.getcwd(), "temp", "numba_cache"))
-
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles

@@ -3,7 +3,6 @@ uvicorn
 python-multipart
 librosa==0.10.1
 numpy==1.26.4
-numba==0.59.1
 soundfile
 scipy
 yt-dlp
