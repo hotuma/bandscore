@@ -26,10 +26,8 @@ temp/
 *.mp3
 *.xlsx
 *.txt
-!requirements.txt
-!runtime.txt
-backend/requirements.txt
-backend/runtime.txt
+!backend/requirements.txt
+!backend/runtime.txt
 
 # binaries (do not commit)
 backend/bin/
