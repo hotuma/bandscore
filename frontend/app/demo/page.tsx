@@ -311,59 +311,68 @@ export default function DemoPage() {
           </ul>
         </div>
 
-        {/* [Value & Future] */}
+        {/* [Value & Future] -> [Next Step Funnel] */}
         <div className="text-center space-y-4 py-8">
+          <h2 className="text-2xl font-bold text-gray-900 leading-snug">
+            🚀 次は、あなたの曲で試してみませんか？
+          </h2>
           <p className="text-lg font-medium text-gray-800">
-            BandScore では、『耳コピに時間がかかる』『譜面を探すのが大変』<br className="hidden sm:inline" />
-            そんな状態から、すぐに練習を始められる体験を目指しています。
+            この demo で見た体験を、実際の音源で確かめられます。
           </p>
-          <p className="text-gray-600 text-sm">
-            将来的には、自分の曲・好きな曲を読み込んで、<br className="hidden sm:inline" />
-            コード進行を確認しながら再生・練習するといった使い方を想定しています。
-          </p>
-        </div>
-
-        {/* [Official Version Objectives] */}
-        <div className="bg-gradient-to-br from-blue-50 to-white border-2 border-blue-100 rounded-2xl p-6 sm:p-8 shadow-sm space-y-6">
-          <div className="space-y-2 text-center sm:text-left">
-            <h3 className="text-xl font-bold text-gray-900 flex items-center justify-center sm:justify-start gap-3">
-              <span className="text-2xl">🚀</span> 正式版で目指していること
-            </h3>
-            <p className="text-gray-700 font-medium leading-relaxed">
-              BandScore は、聴いた瞬間に“練習に入れる”体験を作るために開発中です。
+          <div className="text-gray-600 leading-relaxed space-y-2">
+            <p>
+              BandScore は「耳コピ作業 → 練習開始」までの時間を、<br className="hidden sm:inline" />
+              できるだけ短くするためのツールです。
+            </p>
+            <p>
+              この demo は “完成イメージ” ですが、<br className="hidden sm:inline" />
+              Early Access では、あなたの音源を使って実際に試せます。
             </p>
           </div>
+        </div>
 
-          <ul className="grid sm:grid-cols-2 gap-4">
-            {[
-              "音源を解析してコードを自動生成",
-              "曲に合わせてコード音を再生（練習用）",
-              "生成結果の PDF / MIDI 出力",
-              "生成コードの編集（修正・整形）"
-            ].map((item, i) => (
-              <li key={i} className="flex items-center gap-3 bg-white p-4 rounded-xl border border-blue-100 shadow-sm text-gray-700 font-medium text-sm">
-                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-xs font-bold">✔</span>
-                {item}
-              </li>
-            ))}
-          </ul>
+        {/* [Official Version Objectives] -> [Feature Cards] */}
+        <div className="bg-gradient-to-br from-blue-50 to-white border-2 border-blue-100 rounded-2xl p-6 sm:p-8 shadow-sm space-y-6">
+          <div className="grid sm:grid-cols-2 gap-4">
+            <div className="flex items-center gap-3 bg-white p-4 rounded-xl border border-blue-100 shadow-sm text-gray-700 font-medium text-sm">
+              <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-xs font-bold">✅</span>
+              音源をアップロードしてコードを自動生成
+            </div>
+            <div className="flex items-center gap-3 bg-white p-4 rounded-xl border border-blue-100 shadow-sm text-gray-700 font-medium text-sm">
+              <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-xs font-bold">✅</span>
+              曲に合わせてコード音を再生（練習用）
+            </div>
+            <div className="flex items-center gap-3 bg-white p-4 rounded-xl border border-blue-100 shadow-sm text-gray-700 font-medium text-sm">
+              <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-xs font-bold">✅</span>
+              生成されたコードの修正・整形
+            </div>
+            <div className="flex items-center gap-3 bg-white p-4 rounded-xl border border-blue-100 shadow-sm text-gray-700 font-medium text-sm">
+              <span className="flex-shrink-0 w-6 h-6 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center text-xs font-bold">⏳</span>
+              PDF / MIDI 出力（Early Access で解放）
+            </div>
+          </div>
 
-          <p className="text-xs text-gray-500 bg-white/50 p-4 rounded-lg border border-gray-100 leading-relaxed">
-            ※ いずれも開発中の構想です。提供時期・仕様は変更になる可能性があります。この /demo は解析や保存を行わない“体験用”デモです。
-          </p>
+          <div className="text-xs text-gray-500 bg-white/50 p-4 rounded-lg border border-gray-100 leading-relaxed space-y-1">
+            <p>※ この demo では音源のアップロードはできません。</p>
+            <p>※ Early Access では、2曲まで実際の音源で体験できます。</p>
+          </div>
         </div>
 
         {/* [CTA] */}
         <div className="bg-blue-50 p-8 rounded-2xl text-center space-y-6">
           <a
-            href="/waitlist"
+            href="/early-access?from=demo"
             className="inline-block bg-blue-600 text-white font-bold py-3 px-8 rounded-full shadow-lg hover:bg-blue-700 transition-transform active:scale-95"
           >
-            正式版へのご案内
+            自分の曲で試す（Early Access）
           </a>
-          <p className="text-xs text-gray-500">
-            ※ 現時点では利用登録はできません。公開準備が整い次第、ご案内します。
-          </p>
+          <div className="inline-block text-left mx-auto">
+            <ul className="text-sm text-gray-600 space-y-1">
+              <li>・2曲まで無料で体験できます</li>
+              <li>・解析精度や編集感を確認できます</li>
+              <li>・気に入ったら制限を解除できます</li>
+            </ul>
+          </div>
         </div>
       </div>
 

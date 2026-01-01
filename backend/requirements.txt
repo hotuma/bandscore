@@ -6,3 +6,4 @@ soundfile
 numpy
 scipy
 yt-dlp
+psutil

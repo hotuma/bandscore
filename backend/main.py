@@ -1,3 +1,6 @@
+import os
+os.environ["NUMBA_DISABLE_JIT"] = "1"
+import psutil
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -21,6 +24,12 @@ app = FastAPI()
 # Create temp directory for served files
 TEMP_DIR = "temp"
 os.makedirs(TEMP_DIR, exist_ok=True)
+
+def mem_mb():
+    try:
+        return psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024
+    except:
+        return 0
 
 def cleanup_temp_dir(max_age_sec: int = 60 * 60 * 6):  # 6 hours
     now = time.time()
@@ -321,13 +330,40 @@ def aggregate_chroma_per_segment(
     num_frames = chroma.shape[1]
 
     # ビートが全く検出できない場合 → 全体を1セグメントとして扱う
+    # ビートが全く検出できない場合 → 時間分割フォールバック (0.5秒間隔)
     if beat_times is None or len(beat_times) == 0:
         if num_frames == 0:
             return np.zeros((0, 12)), []
-        start_t = float(times[0])
-        end_t = float(times[-1])
-        seg_c = np.mean(chroma, axis=1)  # (12,)
-        return seg_c[None, :], [(start_t, end_t)]
+            
+        start_time_all = float(times[0])
+        end_time_all = float(times[-1])
+        duration = end_time_all - start_time_all
+        
+        # Fallback interval (e.g. 0.5s = 120BPM 1beat approx)
+        interval = 0.5
+        num_fallback_segments = int(math.ceil(duration / interval))
+        
+        segment_chroma_list = []
+        segments = []
+        frame_indices = np.arange(len(times))
+        
+        for i in range(num_fallback_segments):
+            s = start_time_all + i * interval
+            e = min(start_time_all + (i + 1) * interval, end_time_all)
+            if s >= e: break
+            
+            mask = (times >= s) & (times < e)
+            idx = frame_indices[mask]
+            
+            if len(idx) > 0:
+                seg_c = np.mean(chroma[:, idx], axis=1)
+                segment_chroma_list.append(seg_c)
+                segments.append((s, e))
+        
+        if not segment_chroma_list:
+             return np.zeros((0, 12)), []
+             
+        return np.stack(segment_chroma_list, axis=0), segments
 
     num_beats = len(beat_times)
     num_segments = int(math.ceil(num_beats / beats_per_segment))
@@ -489,9 +525,13 @@ def download_youtube_audio(url: str, cookie_path: str | None = None) -> str:
 def analyze_audio_file(file_path: str) -> dict:
     """Core analysis logic reusable for both uploads and URLs."""
     print(f"[DEBUG] Starting analysis for {file_path}")
+    print(f"mem start: {mem_mb():.1f} MB")
     try:
         # 1. Load & Preprocess
-        y, sr = librosa.load(file_path, sr=22050, mono=True)
+        # OPTIMIZATION: Limit duration to 30s to prevent OOM on Render Free Tier
+        y, sr = librosa.load(file_path, sr=22050, mono=True, duration=30.0)
+        print(f"mem after load: {mem_mb():.1f} MB")
+        
         print(f"[DEBUG] Audio loaded. Size: {y.size}, SR: {sr}")
         if y.size == 0:
             raise ValueError("Audio file is empty or unreadable")
@@ -512,7 +552,10 @@ def analyze_audio_file(file_path: str) -> dict:
         print("[DEBUG] Computing chroma...")
         hop_length = 2048
         chroma = compute_chroma_log(y, sr, hop_length=hop_length)
+        print(f"mem after chroma: {mem_mb():.1f} MB")
+        
         bass_chroma = compute_bass_chroma(y, sr, hop_length=hop_length)
+        print(f"mem after bass chroma: {mem_mb():.1f} MB")
         print(f"[DEBUG] Chroma shape: {chroma.shape}")
 
         if chroma.shape[1] == 0:
@@ -596,17 +639,12 @@ def health():
 def version():
     return {"git_sha": os.getenv("RENDER_GIT_COMMIT", "unknown")}
 
-# --- DUMMY IMPLEMENTATION FOR CONNECTIVITY CHECK ---
-@app.post("/analyze")
-async def analyze(file: UploadFile = File(...)):
-    return {
-        "chords": [{"name":"C","startSec":0,"endSec":2}],
-        "meta": {"bpm": 120, "key": "C", "durationSec": 2}
-    }
 
-# --- REAL IMPLEMENTATION (TEMPORARILY DISABLED) ---
-# @app.post("/analyze")
-async def _analyze_audio_real(file: UploadFile = File(...)):
+
+@app.post("/analyze")
+async def analyze_audio(file: UploadFile = File(...)):
+    print("=== ANALYZE START ===")
+    
     # 1. Validate File Size
     # UploadFile.file is a SpooledTemporaryFile. We can check size.
     file.file.seek(0, os.SEEK_END)
