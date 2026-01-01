@@ -3,9 +3,8 @@ uvicorn
 python-multipart
 librosa==0.10.1
 numpy==1.26.4
-scipy==1.11.4
+numba==0.59.1
 soundfile
+scipy
 yt-dlp
 psutil
-numba==0.59.1
-llvmlite==0.42.0

@@ -1,6 +1,10 @@
 import os
-os.environ["NUMBA_DISABLE_JIT"] = "1"
+
 import psutil
+
+# Set Numba cache to temp dir to avoid read-only FS issues and ensure freshness
+os.environ.setdefault("NUMBA_CACHE_DIR", os.path.join(os.getcwd(), "temp", "numba_cache"))
+
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -110,11 +114,12 @@ def highpass_filter(y: np.ndarray, sr: int, cutoff_hz: float = 60.0) -> np.ndarr
 
 def compute_chroma_log(y: np.ndarray, sr: int, hop_length: int = 2048) -> np.ndarray:
     """
-    Compute CQT-based chroma features with log compression and normalization.
+    Compute STFT-based chroma features (more stable than CQT on Render).
     Returns: (12, T)
     """
-    # CQT chroma
-    chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=hop_length)
+    # STFT-based chroma (Numba/JIT依存が小さく、Renderで安定しやすい)
+    n_fft = 4096
+    chroma = librosa.feature.chroma_stft(y=y, sr=sr, hop_length=hop_length, n_fft=n_fft)
 
     # Log compression: log(1 + k * chroma)
     k = 10.0
@@ -126,23 +131,18 @@ def compute_chroma_log(y: np.ndarray, sr: int, hop_length: int = 2048) -> np.nda
 
 def compute_bass_chroma(y: np.ndarray, sr: int, hop_length: int = 2048) -> np.ndarray:
     """
-    Compute Bass Chroma (E1-E4 focus).
+    Compute Bass Chroma (STFT based).
     Returns: (12, T)
     """
-    fmin = librosa.note_to_hz("E1")
-    bass_chroma = librosa.feature.chroma_cqt(
-        y=y,
-        sr=sr,
-        hop_length=hop_length,
-        fmin=fmin,
-        n_octaves=3,
-    )
+    # 低域を強調したいので、簡易にローカット後の y を使うのではなく、
+    # 低域強調のために少しカットオフを上げない/または別フィルタ設計も可能。
+    n_fft = 4096
+    chroma = librosa.feature.chroma_stft(y=y, sr=sr, hop_length=hop_length, n_fft=n_fft)
 
     k = 10.0
-    bass_chroma_log = np.log1p(k * bass_chroma)
-    bass_chroma_norm = bass_chroma_log / (np.sum(bass_chroma_log, axis=0, keepdims=True) + 1e-8)
-
-    return bass_chroma_norm
+    chroma_log = np.log1p(k * chroma)
+    chroma_norm = chroma_log / (np.sum(chroma_log, axis=0, keepdims=True) + 1e-8)
+    return chroma_norm
 
 # --- Chord Templates ---
 
@@ -331,7 +331,7 @@ def aggregate_chroma_per_segment(
 
     # ビートが全く検出できない場合 → 全体を1セグメントとして扱う
     # ビートが全く検出できない場合 → 時間分割フォールバック (0.5秒間隔)
-    if beat_times is None or len(beat_times) == 0:
+    if beat_times is None or len(beat_times) < 2:
         if num_frames == 0:
             return np.zeros((0, 12)), []
             
@@ -562,7 +562,7 @@ def analyze_audio_file(file_path: str) -> dict:
             raise ValueError("Chroma extraction failed or audio too short")
 
         # 4. Time axes
-        beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=512)
+        beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=hop_length)
         times = librosa.frames_to_time(np.arange(chroma.shape[1]), sr=sr, hop_length=hop_length)
 
         # 5. Aggregate per segment
@@ -596,6 +596,9 @@ def analyze_audio_file(file_path: str) -> dict:
         print(f"[DEBUG] Raw chords detected: {len(raw_chords)}")
 
         smoothed_chords = smooth_chord_sequence(raw_chords)
+
+        print(f"[DEBUG] unique chords: {len(set(smoothed_chords))}")
+        print(f"[DEBUG] first 20 chords: {smoothed_chords[:20]}")
 
         bars = []
         for i, chord_name in enumerate(smoothed_chords):
