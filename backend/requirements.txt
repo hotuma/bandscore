@@ -1,9 +1,10 @@
 fastapi
 uvicorn
 python-multipart
-librosa
+librosa==0.10.1
 soundfile
-numpy
+numpy==1.26.4
 scipy
 yt-dlp
 psutil
+numba==0.59.0

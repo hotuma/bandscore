@@ -30,3 +30,4 @@ temp/
 # binaries (do not commit)
 backend/bin/
 *.exe
+!backend/requirements.txt
