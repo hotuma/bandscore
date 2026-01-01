@@ -1,9 +1,10 @@
 fastapi
 uvicorn
 python-multipart
+setuptools>=70
 librosa==0.10.1
 numpy==1.26.4
-soundfile
 scipy
+soundfile
 yt-dlp
 psutil

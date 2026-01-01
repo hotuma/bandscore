@@ -26,6 +26,7 @@ temp/
 *.mp3
 *.xlsx
 *.txt
+!runtime.txt
 !backend/requirements.txt
 !backend/runtime.txt
 
