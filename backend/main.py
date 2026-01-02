@@ -525,8 +525,9 @@ def analyze_audio_file(file_path: str) -> dict:
     print(f"mem start: {mem_mb():.1f} MB")
     try:
         # 1. Load & Preprocess
-        # OPTIMIZATION: Limit duration to 30s to prevent OOM on Render Free Tier
-        y, sr = librosa.load(file_path, sr=22050, mono=True, duration=30.0)
+        # 1. Load & Preprocess
+        # Remove duration limit for full analysis (JIT/memory issues resolved)
+        y, sr = librosa.load(file_path, sr=22050, mono=True)
         print(f"mem after load: {mem_mb():.1f} MB")
         
         print(f"[DEBUG] Audio loaded. Size: {y.size}, SR: {sr}")
@@ -559,7 +560,10 @@ def analyze_audio_file(file_path: str) -> dict:
             raise ValueError("Chroma extraction failed or audio too short")
 
         # 4. Time axes
-        beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=hop_length)
+        # Fix: beat_track uses hop_length=512 by default, so we must use 512 for conversion
+        # scaling from 512 to 2048 caused 4x time dilation
+        beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=512)
+        # Chroma frames are 2048
         times = librosa.frames_to_time(np.arange(chroma.shape[1]), sr=sr, hop_length=hop_length)
 
         # 5. Aggregate per segment
