@@ -264,6 +264,7 @@ export default function EarlyAccessPage() {
                 const data = await s.json();
                 const jobStatus = data.status;
                 const p = typeof data.progress === "number" ? data.progress : 0;
+                console.log("progress", p, "status", jobStatus);
                 setProgress(p);
 
                 if (jobStatus === "error") throw new Error("ANALYSIS_FAILED_BG");
