@@ -548,8 +548,9 @@ def analyze_audio_file(file_path: str, progress_callback=None) -> dict:
 
     try:
         # 1. Load & Preprocess
-        # Remove duration limit for full analysis (JIT/memory issues resolved)
-        y, sr = librosa.load(file_path, sr=22050, mono=True)
+        # LIMIT DURATION to 2 minutes for stability (Render 502/OOM fix)
+        MAX_ANALYSIS_SEC = 120.0
+        y, sr = librosa.load(file_path, sr=22050, mono=True, duration=MAX_ANALYSIS_SEC)
         print(f"mem after load: {mem_mb():.1f} MB")
         _progress(20) # Loaded
         
@@ -575,7 +576,8 @@ def analyze_audio_file(file_path: str, progress_callback=None) -> dict:
         chroma = compute_chroma_log(y, sr, hop_length=hop_length)
         print(f"mem after chroma: {mem_mb():.1f} MB")
         
-        bass_chroma = compute_bass_chroma(y, sr, hop_length=hop_length)
+        bass_chroma = chroma # compute_bass_chroma(y, sr, hop_length=hop_length)
+        print(f"[DEBUG] Bass chroma disabled for memory stability")
         print(f"mem after bass chroma: {mem_mb():.1f} MB")
         print(f"[DEBUG] Chroma shape: {chroma.shape}")
         _progress(60) # Chroma done

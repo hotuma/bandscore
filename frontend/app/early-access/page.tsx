@@ -248,6 +248,9 @@ export default function EarlyAccessPage() {
     const pollJob = async (jobId: string, signal: AbortSignal) => {
         const base = process.env.NEXT_PUBLIC_API_BASE_URL;
 
+        let lastProgress = -1;
+        let lastUpdateTime = Date.now();
+
         while (true) {
             if (signal.aborted) return;
 
@@ -256,7 +259,7 @@ export default function EarlyAccessPage() {
 
             if (signal.aborted) return;
 
-            // Check status (abort if component unmounted? simplified for MVP)
+            // Check status
             try {
                 const s = await fetch(`${base}/analyze/status/${jobId}`, { signal });
                 if (s.status === 404) throw new Error("JOB_LOST");
@@ -264,8 +267,20 @@ export default function EarlyAccessPage() {
                 const data = await s.json();
                 const jobStatus = data.status;
                 const p = typeof data.progress === "number" ? data.progress : 0;
+
                 console.log("progress", p, "status", jobStatus);
                 setProgress(p);
+
+                // Stalled Check
+                if (p > lastProgress) {
+                    lastProgress = p;
+                    lastUpdateTime = Date.now();
+                } else {
+                    // Progress hasn't moved
+                    if (Date.now() - lastUpdateTime > 25000) { // 25s timeout
+                        throw new Error("JOB_STALLED");
+                    }
+                }
 
                 if (jobStatus === "error") throw new Error("ANALYSIS_FAILED_BG");
                 if (jobStatus === "done") {
@@ -276,7 +291,7 @@ export default function EarlyAccessPage() {
 
                     setChords(resultData.chords);
                     setMeta(resultData.meta);
-                    setProgress(100); // Set progress to 100 when done
+                    setProgress(100);
                     setStatus('ready');
 
                     // Increment Usage
@@ -296,8 +311,11 @@ export default function EarlyAccessPage() {
                 if (signal.aborted || e.name === "AbortError") return;
 
                 console.error("Polling error:", e);
-                if (e.message === "JOB_LOST") {
-                    setError({ code: "SERVER_RESTARTED", message: "解析が中断されたので、同じファイルで再試行してください" });
+                if (e.message === "JOB_LOST" || e.message === "JOB_STALLED") {
+                    setError({
+                        code: "SERVER_RESTARTED",
+                        message: "サーバーが再起動した可能性があるため、解析が中断されました。もう一度お試しください。"
+                    });
                 } else if (e.message === "ANALYSIS_FAILED_BG") {
                     setError({ code: "ANALYSIS_FAILED", message: "Audio analysis failed on the server." });
                 } else {
