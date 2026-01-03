@@ -3,6 +3,7 @@ import os
 import psutil
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -16,7 +17,7 @@ import yt_dlp
 from yt_dlp.utils import DownloadError
 import time
 import uuid
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from scipy.signal import butter, sosfilt
 from collections import Counter
 
@@ -64,7 +65,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# --- Job store (NEW) ---
+jobs: Dict[str, Dict[str, Any]] = {}
+JOB_TTL_SEC = 3600  # 1 hour
+
+def cleanup_jobs():
+    now = time.time()
+    expired = [jid for jid, j in jobs.items() if j.get("expires_at", 0) < now]
+    for jid in expired:
+        jobs.pop(jid, None)
+
 # --- Helpers & Data ---
+
 
 ChordTab = dict[str, list[str]]
 
@@ -645,12 +658,65 @@ def version():
 
 
 
+def run_analysis_bg(job_id: str, file_path: str):
+    cleanup_jobs()
+    try:
+        raw_result = analyze_audio_file(file_path)
+
+        # Transformation Logic (formerly in endpoint) to match frontend contract
+        bpm = raw_result["bpm"]
+        seconds_per_beat = 60.0 / bpm if bpm > 0 else 0.5
+        segment_duration = seconds_per_beat * 2
+        
+        chords_list = []
+        for i, bar in enumerate(raw_result["bars"]):
+            start_sec = i * segment_duration
+            end_sec = (i + 1) * segment_duration
+            if start_sec > raw_result["duration_sec"]:
+                break
+            if end_sec > raw_result["duration_sec"]:
+                end_sec = raw_result["duration_sec"]
+                
+            chords_list.append({
+                "startSec": round(start_sec, 3),
+                "endSec": round(end_sec, 3),
+                "name": bar["chord"],
+                "confidence": 1.0 
+            })
+
+        final_result = {
+            "chords": chords_list,
+            "meta": {
+                "durationSec": raw_result["duration_sec"],
+                "bpm": bpm,
+                "key": raw_result["key"]
+            }
+        }
+
+        jobs[job_id] = {
+            **jobs.get(job_id, {}),
+            "status": "done",
+            "done_at": time.time(),
+            "result": final_result,
+        }
+    except Exception as e:
+        print(f"[ERROR] BG Analysis failed: {e}")
+        jobs[job_id] = {
+            **jobs.get(job_id, {}),
+            "status": "error",
+            "done_at": time.time(),
+            "error": str(e),
+        }
+    finally:
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        except Exception:
+            pass
+
 @app.post("/analyze")
-async def analyze_audio(file: UploadFile = File(...)):
-    print("=== ANALYZE START ===")
-    
+async def analyze(file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
     # 1. Validate File Size
-    # UploadFile.file is a SpooledTemporaryFile. We can check size.
     file.file.seek(0, os.SEEK_END)
     size = file.file.tell()
     file.file.seek(0)
@@ -670,123 +736,102 @@ async def analyze_audio(file: UploadFile = File(...)):
             detail={"error": {"code": "UNSUPPORTED_FORMAT", "message": "Only mp3, wav, and m4a are supported."}}
         )
 
-    # Save uploaded file
-    # Use a safe unique name
-    import uuid
-    safe_filename = f"{uuid.uuid4()}{ext}"
+    cleanup_jobs()
+
+    job_id = str(uuid.uuid4())
+    now = time.time()
+    jobs[job_id] = {
+        "status": "processing",
+        "submitted_at": now,
+        "expires_at": now + JOB_TTL_SEC,
+    }
+
+    # Use a unique name for TEMP storage
+    safe_filename = f"{job_id}{ext}"
     file_path = os.path.join(TEMP_DIR, safe_filename)
 
-    try:
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        
-        # 3. Analyze
-        # We need to adapt analyze_audio_file to return exact start/end logic or map it here.
-        # Since analyze_audio_file returns 'bars' (equal duration), we can map them back to time.
-        # However, analyze_audio_file internal logic actually has segments. 
-        # For now, we will wrap analyze_audio_file and transform the result.
-        
-        raw_result = analyze_audio_file(file_path)
-        
-        # Transform 'bars' to 'chords' list for the new contract
-        # The current 'bars' output assumes fixed structural bars.
-        # But 'analyze_audio_file' calculates 2 beats per segment.
-        # Let's reconstruct precise timing from the result's bpm/time_sig.
-        
-        bpm = raw_result["bpm"] # float
-        # Each bar in raw_result corresponds to 2 beats (since beats_per_segment=2 in simple logic)?
-        # Actually in main.py: aggregate_chroma_per_segment(beats_per_segment=2)
-        # So each "bar" in the current simplified logic is 2 beats.
-        # Default time signature returned is "2/4".
-        
-        seconds_per_beat = 60.0 / bpm if bpm > 0 else 0.5
-        segment_duration = seconds_per_beat * 2
-        
-        chords_list = []
-        for i, bar in enumerate(raw_result["bars"]):
-            # bar has: { "bar": i+1, "chord": "Am", "tab": ... }
-            start_sec = i * segment_duration
-            end_sec = (i + 1) * segment_duration
-            
-            # Clip to actual duration
-            if start_sec > raw_result["duration_sec"]:
-                break
-            if end_sec > raw_result["duration_sec"]:
-                end_sec = raw_result["duration_sec"]
-                
-            chords_list.append({
-                "startSec": round(start_sec, 3),
-                "endSec": round(end_sec, 3),
-                "name": bar["chord"],
-                "confidence": 1.0 # Mock confidence for now as logic behaves deterministically
-            })
+    with open(file_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
 
-        return {
-            "chords": chords_list,
-            "meta": {
-                "durationSec": raw_result["duration_sec"],
-                "bpm": bpm,
-                "key": raw_result["key"]
-            }
-        }
+    background_tasks.add_task(run_analysis_bg, job_id, file_path)
 
-    except HTTPException:
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        raise
-    except Exception as e:
-        # Cleanup
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        print(f"[ERROR] Analysis failed: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail={"error": {"code": "ANALYSIS_FAILED", "message": str(e)}}
-        )
+    return JSONResponse(status_code=202, content={"job_id": job_id})
+
+@app.get("/analyze/status/{job_id}")
+def analyze_status(job_id: str):
+    cleanup_jobs()
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    return {
+        "status": job.get("status"),
+        "updated_at": job.get("done_at") or job.get("submitted_at"),
+        "error": job.get("error")
+    }
+
+@app.get("/analyze/result/{job_id}")
+def analyze_result(job_id: str):
+    cleanup_jobs()
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job.get("status") != "done":
+        raise HTTPException(status_code=409, detail="job not done")
+    return job.get("result")
 
 @app.post("/analyze/url")
-def analyze_url(
+async def analyze_url(
     url: str = Form(...),
     cookies: UploadFile | None = File(None),
+    background_tasks: BackgroundTasks = None
 ):
-    cleanup_temp_dir()
+    cleanup_jobs()
     
     cookie_path = None
     try:
         # Validate and save cookies if provided
         if cookies:
-            # 1. Validation
             if not cookies.filename.endswith(".txt"):
                 raise HTTPException(status_code=400, detail="Cookie file must be a .txt file")
             
-            # Check size (approximate using seek if needed, but SpooledTemporaryFile might not need it immediately)
-            # Safe approach: Read chunks to temp file and count bytes
-            
-            # 2. Secure Save
             suffix = os.path.splitext(cookies.filename)[1]
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                 size = 0
                 while True:
-                    chunk = cookies.file.read(1024 * 1024) # 1MB chunks
+                    chunk = cookies.file.read(1024 * 1024) 
                     if not chunk:
                         break
                     size += len(chunk)
-                    if size > 1024 * 1024 * 1: # 1MB limit
+                    if size > 1024 * 1024 * 1: 
                         raise HTTPException(status_code=400, detail="Cookie file too large (limit 1MB)")
                     tmp.write(chunk)
                 cookie_path = tmp.name
             print(f"[DEBUG] cookies loaded: {cookie_path}")
 
+        # Download synchronously (usually fast enough, but ideally this would be part of the job too)
+        # However, for MVP, we'll keep download sync to get file_path, then offload analysis.
+        # IF download is > 25s, this might still 502. 
+        # But moving download to BG requires passing 'url' and 'cookie_path' to BG.
+        # 'run_analysis_bg' expects 'file_path'.
+        # So we download here. If it times out, it times out. 
+        # User accepted focus on /analyze (file upload). 
+        # But we can try to be safe.
         file_path = download_youtube_audio(url, cookie_path=cookie_path)
         
-        result = analyze_audio_file(file_path)
+        # Now create job
+        job_id = str(uuid.uuid4())
+        now = time.time()
+        jobs[job_id] = {
+            "status": "processing",
+            "submitted_at": now,
+            "expires_at": now + JOB_TTL_SEC,
+        }
         
-        # Return URL
-        filename = os.path.basename(file_path)
-        result["audio_url"] = f"/temp/{filename}"
-        return result
+        # The file is already at file_path (in TEMP_DIR).
+        # We just need to register the BG task.
+        background_tasks.add_task(run_analysis_bg, job_id, file_path)
+        
+        return JSONResponse(status_code=202, content={"job_id": job_id})
 
     except HTTPException:
         raise
@@ -794,10 +839,12 @@ def analyze_url(
         raise HTTPException(status_code=500, detail=str(e))
     
     finally:
-        # Secure cleanup
+        # Secure cleanup of COOKIES only. Audio file is needed for BG task.
         if cookie_path and os.path.exists(cookie_path):
             try:
                 os.remove(cookie_path)
-                print("[DEBUG] cookies deleted")
-            except Exception as e:
-                print(f"[WARN] Failed to delete cookie file: {e}")
+            except:
+                pass
+
+        
+

@@ -217,6 +217,7 @@ export default function EarlyAccessPage() {
     const prevChordIndexRef = useRef<number>(-1);
     const audioRef = useRef<HTMLAudioElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const abortPollingRef = useRef<AbortController | null>(null);
 
     // Constants
     const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
@@ -241,6 +242,65 @@ export default function EarlyAccessPage() {
         }
     };
 
+    const pollJob = async (jobId: string, signal: AbortSignal) => {
+        const base = process.env.NEXT_PUBLIC_API_BASE_URL;
+
+        while (true) {
+            if (signal.aborted) return;
+
+            // Wait 1.5s
+            await new Promise(r => setTimeout(r, 1500));
+
+            if (signal.aborted) return;
+
+            // Check status (abort if component unmounted? simplified for MVP)
+            try {
+                const s = await fetch(`${base}/analyze/status/${jobId}`, { signal });
+                if (s.status === 404) throw new Error("JOB_LOST");
+
+                const { status: jobStatus } = await s.json();
+
+                if (jobStatus === "error") throw new Error("ANALYSIS_FAILED_BG");
+                if (jobStatus === "done") {
+                    // Fetch Result
+                    const r = await fetch(`${base}/analyze/result/${jobId}`);
+                    if (!r.ok) throw new Error("RESULT_FETCH_FAILED");
+                    const data: AnalysisResponse = await r.json();
+
+                    setChords(data.chords);
+                    setMeta(data.meta);
+                    setStatus('ready');
+
+                    // Increment Usage
+                    setEaUsage((prev) => {
+                        const next: EaUsage = {
+                            ...prev,
+                            analysisCount: (prev.analysisCount ?? 0) + 1,
+                            firstAnalysisAt: prev.firstAnalysisAt ?? Date.now(),
+                        };
+                        saveEaUsage(next);
+                        return next;
+                    });
+                    return; // Done
+                }
+                // If processing, loop continues
+            } catch (e: any) {
+                if (signal.aborted || e.name === "AbortError") return;
+
+                console.error("Polling error:", e);
+                if (e.message === "JOB_LOST") {
+                    setError({ code: "SERVER_RESTARTED", message: "解析が中断されたので、同じファイルで再試行してください" });
+                } else if (e.message === "ANALYSIS_FAILED_BG") {
+                    setError({ code: "ANALYSIS_FAILED", message: "Audio analysis failed on the server." });
+                } else {
+                    setError({ code: "NETWORK_ERROR", message: "Connection lost during polling." });
+                }
+                setStatus('error');
+                return; // Stop polling
+            }
+        }
+    };
+
     const handleAnalyze = async () => {
         if (!file) return;
 
@@ -257,6 +317,12 @@ export default function EarlyAccessPage() {
             return;
         }
 
+        if (abortPollingRef.current) {
+            abortPollingRef.current.abort();
+        }
+        const controller = new AbortController();
+        abortPollingRef.current = controller;
+
         setStatus('analyzing');
         setError(null);
 
@@ -267,55 +333,39 @@ export default function EarlyAccessPage() {
             // Connect to Backend
             const base = process.env.NEXT_PUBLIC_API_BASE_URL;
             const url = `${base}/analyze`;
-            console.log("Analyzing at:", url);
+            console.log("Submitting job to:", url);
 
             const res = await fetch(url, {
                 method: 'POST',
                 body: formData,
+                signal: controller.signal
             });
 
             if (!res.ok) {
+                // Handle immediate errors (validation etc)
                 let errorData;
-                try {
-                    errorData = await res.json();
-                } catch (e) {
-                    throw new Error(`Server error: ${res.status}`);
-                }
+                try { errorData = await res.json(); } catch (e) { }
 
-                // Handle Contract Error Format
-                if (errorData && errorData.detail && errorData.detail.error) {
-                    throw errorData.detail.error; // { code, message }
-                } else if (errorData && errorData.detail) {
-                    throw { code: 'UNKNOWN_ERROR', message: errorData.detail };
+                if (errorData?.detail?.error) {
+                    throw errorData.detail.error;
                 } else {
                     throw { code: 'HTTP_ERROR', message: `Status ${res.status}` };
                 }
             }
 
-            const data: AnalysisResponse = await res.json();
-            console.log('Analysis result:', data);
+            const { job_id } = await res.json();
+            console.log("Job started:", job_id);
 
-            setChords(data.chords);
-            setMeta(data.meta);
-            setStatus('ready');
-
-            // Increment Usage
-            setEaUsage((prev) => {
-                const next: EaUsage = {
-                    ...prev,
-                    analysisCount: (prev.analysisCount ?? 0) + 1,
-                    firstAnalysisAt: prev.firstAnalysisAt ?? Date.now(),
-                };
-                saveEaUsage(next);
-                return next;
-            });
+            // Start Polling
+            pollJob(job_id, controller.signal);
 
         } catch (err: any) {
-            console.error('Analysis failed:', err);
+            if (err.name === "AbortError") return;
+            console.error('Submission failed:', err);
             if (err.code && err.message) {
                 setError(err);
             } else {
-                setError({ code: 'ANALYSIS_FAILED', message: 'An unexpected error occurred during analysis.' });
+                setError({ code: 'SUBMISSION_FAILED', message: 'Failed to start analysis.' });
             }
             setStatus('error');
         }
