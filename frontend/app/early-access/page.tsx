@@ -2,6 +2,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { Trash2, AlertCircle, Loader2 } from 'lucide-react';
 import { playChordFromTab, setChordVolume } from '../../lib/chordAudio';
 
 // Types matching Backend Contract
@@ -137,6 +138,7 @@ export default function EarlyAccessPage() {
     const [chords, setChords] = useState<Chord[]>([]);
     const [meta, setMeta] = useState<AnalysisMeta | null>(null);
     const [status, setStatus] = useState<AppStatus>('idle');
+    const [progress, setProgress] = useState<number>(0); // Added progress state
     const [error, setError] = useState<ErrorState | null>(null);
     const [currentTime, setCurrentTime] = useState(0);
 
@@ -237,6 +239,7 @@ export default function EarlyAccessPage() {
             setAudioUrl(URL.createObjectURL(selectedFile));
             setError(null);
             setStatus('idle');
+            setProgress(0);
             setChords([]);
             setMeta(null);
         }
@@ -258,17 +261,21 @@ export default function EarlyAccessPage() {
                 const s = await fetch(`${base}/analyze/status/${jobId}`, { signal });
                 if (s.status === 404) throw new Error("JOB_LOST");
 
-                const { status: jobStatus } = await s.json();
+                const data = await s.json();
+                const jobStatus = data.status;
+                const p = typeof data.progress === "number" ? data.progress : 0;
+                setProgress(p);
 
                 if (jobStatus === "error") throw new Error("ANALYSIS_FAILED_BG");
                 if (jobStatus === "done") {
                     // Fetch Result
                     const r = await fetch(`${base}/analyze/result/${jobId}`);
                     if (!r.ok) throw new Error("RESULT_FETCH_FAILED");
-                    const data: AnalysisResponse = await r.json();
+                    const resultData: AnalysisResponse = await r.json();
 
-                    setChords(data.chords);
-                    setMeta(data.meta);
+                    setChords(resultData.chords);
+                    setMeta(resultData.meta);
+                    setProgress(100); // Set progress to 100 when done
                     setStatus('ready');
 
                     // Increment Usage
@@ -324,6 +331,7 @@ export default function EarlyAccessPage() {
         abortPollingRef.current = controller;
 
         setStatus('analyzing');
+        setProgress(0);
         setError(null);
 
         const formData = new FormData();
@@ -641,9 +649,27 @@ export default function EarlyAccessPage() {
 
                 {/* LOADING STATE */}
                 {status === 'analyzing' && (
-                    <div className="text-center py-12 animate-pulse space-y-4">
-                        <div className="inline-block w-12 h-12 border-4 border-teal-500 border-t-transparent rounded-full animate-spin"></div>
-                        <p className="text-teal-400 font-medium">Analyzing audio...</p>
+                    <div className="text-center py-12">
+                        <Loader2 className="h-12 w-12 animate-spin text-teal-500 mx-auto mb-4" />
+                        <h3 className="text-xl font-bold mb-2">Analyzing Audio...</h3>
+                        <p className="text-gray-400">
+                            Detecting chords, beats, and key signature. <br />
+                            This may take a moment depending on the file size.
+                        </p>
+
+                        {/* Progress Bar */}
+                        <div className="max-w-md mx-auto mt-6">
+                            <div className="flex items-center justify-between text-xs text-gray-400 mb-2 font-mono">
+                                <span>PROCESSING</span>
+                                <span>{Math.floor(progress)}%</span>
+                            </div>
+                            <div className="h-1.5 w-full bg-neutral-800 rounded-full overflow-hidden">
+                                <div
+                                    className="h-full bg-gradient-to-r from-teal-500 to-emerald-400 transition-all duration-300 ease-out"
+                                    style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
+                                />
+                            </div>
+                        </div>
                     </div>
                 )}
 

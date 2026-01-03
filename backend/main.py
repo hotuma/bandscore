@@ -532,16 +532,26 @@ def download_youtube_audio(url: str, cookie_path: str | None = None) -> str:
                 )
             raise e
 
-def analyze_audio_file(file_path: str) -> dict:
+def analyze_audio_file(file_path: str, progress_callback=None) -> dict:
     """Core analysis logic reusable for both uploads and URLs."""
+    
+    def _progress(p: float):
+        if progress_callback:
+            try:
+                progress_callback(float(p))
+            except Exception:
+                pass
+
     print(f"[DEBUG] Starting analysis for {file_path}")
     print(f"mem start: {mem_mb():.1f} MB")
+    _progress(5) # Start
+
     try:
-        # 1. Load & Preprocess
         # 1. Load & Preprocess
         # Remove duration limit for full analysis (JIT/memory issues resolved)
         y, sr = librosa.load(file_path, sr=22050, mono=True)
         print(f"mem after load: {mem_mb():.1f} MB")
+        _progress(20) # Loaded
         
         print(f"[DEBUG] Audio loaded. Size: {y.size}, SR: {sr}")
         if y.size == 0:
@@ -554,10 +564,10 @@ def analyze_audio_file(file_path: str) -> dict:
         # 2. Beat tracking
         print("[DEBUG] Beat tracking...")
         tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
-        # Use float for precision to prevent drift
         val = float(tempo) if np.ndim(tempo) == 0 else float(tempo[0])
         bpm = round(val, 2)
         print(f"[DEBUG] BPM: {bpm}, Beats detected: {len(beat_frames)}")
+        _progress(35) # Beat tracking done
 
         # 3. Chroma
         print("[DEBUG] Computing chroma...")
@@ -568,15 +578,13 @@ def analyze_audio_file(file_path: str) -> dict:
         bass_chroma = compute_bass_chroma(y, sr, hop_length=hop_length)
         print(f"mem after bass chroma: {mem_mb():.1f} MB")
         print(f"[DEBUG] Chroma shape: {chroma.shape}")
+        _progress(60) # Chroma done
 
         if chroma.shape[1] == 0:
             raise ValueError("Chroma extraction failed or audio too short")
 
         # 4. Time axes
-        # Fix: beat_track uses hop_length=512 by default, so we must use 512 for conversion
-        # scaling from 512 to 2048 caused 4x time dilation
         beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=512)
-        # Chroma frames are 2048
         times = librosa.frames_to_time(np.arange(chroma.shape[1]), sr=sr, hop_length=hop_length)
 
         # 5. Aggregate per segment
@@ -584,6 +592,7 @@ def analyze_audio_file(file_path: str) -> dict:
         main_matrix, segments = aggregate_chroma_per_segment(chroma, times, beat_times, beats_per_segment=2)
         bass_matrix, _ = aggregate_chroma_per_segment(bass_chroma, times, beat_times, beats_per_segment=2)
         print(f"[DEBUG] Segments: {len(segments)}")
+        _progress(75) # Aggregation done
 
         # 6. Key estimation
         key_root, key_mode = estimate_key_from_chroma(chroma)
@@ -608,6 +617,7 @@ def analyze_audio_file(file_path: str) -> dict:
             bass_weight=0.3
         )
         print(f"[DEBUG] Raw chords detected: {len(raw_chords)}")
+        _progress(90) # Detection done
 
         smoothed_chords = smooth_chord_sequence(raw_chords)
 
@@ -616,6 +626,11 @@ def analyze_audio_file(file_path: str) -> dict:
 
         bars = []
         for i, chord_name in enumerate(smoothed_chords):
+            # Granular progress for final loop (90 -> 99)
+            if len(smoothed_chords) > 0 and i % 20 == 0:
+                 progress_percent = 90 + 9 * (i / len(smoothed_chords))
+                 _progress(progress_percent)
+
             tab = chord_to_tab(chord_name)
             bars.append({
                 "bar": i + 1,
@@ -626,6 +641,7 @@ def analyze_audio_file(file_path: str) -> dict:
             })
         
         print(f"[DEBUG] Analysis complete. Returning {len(bars)} bars.")
+        _progress(99)
         return {
             "bpm": bpm,
             "duration_sec": round(duration_sec, 1),
@@ -660,8 +676,28 @@ def version():
 
 def run_analysis_bg(job_id: str, file_path: str):
     cleanup_jobs()
+    
+    # Init progress
+    jobs[job_id] = {
+        **jobs.get(job_id, {}),
+        "status": "processing",
+        "progress": 0.0, 
+        "updated_at": time.time()
+    }
+
+    def update_progress(p: float):
+        p = max(0.0, min(100.0, p))
+        job = jobs.get(job_id, {})
+        # Only update if job still exists
+        if job:
+            jobs[job_id] = {
+                **job,
+                "progress": p,
+                "updated_at": time.time(),
+            }
+
     try:
-        raw_result = analyze_audio_file(file_path)
+        raw_result = analyze_audio_file(file_path, progress_callback=update_progress)
 
         # Transformation Logic (formerly in endpoint) to match frontend contract
         bpm = raw_result["bpm"]
@@ -696,6 +732,7 @@ def run_analysis_bg(job_id: str, file_path: str):
         jobs[job_id] = {
             **jobs.get(job_id, {}),
             "status": "done",
+            "progress": 100.0,
             "done_at": time.time(),
             "result": final_result,
         }
@@ -766,6 +803,7 @@ def analyze_status(job_id: str):
     return {
         "status": job.get("status"),
         "updated_at": job.get("done_at") or job.get("submitted_at"),
+        "progress": job.get("progress", 0.0),
         "error": job.get("error")
     }
 
