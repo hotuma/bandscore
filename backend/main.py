@@ -682,6 +682,16 @@ def version():
 
 
 
+@app.on_event("startup")
+def startup_event():
+    # Warmup librosa on startup to reduce first-request latency
+    try:
+        y = np.zeros(22050)
+        librosa.feature.chroma_stft(y=y, sr=22050)
+        print("[INFO] Warmup complete")
+    except:
+        pass
+
 def run_analysis_bg(job_id: str, file_path: str):
     cleanup_jobs()
     
@@ -706,19 +716,17 @@ def run_analysis_bg(job_id: str, file_path: str):
                 "updated_at": time.time(),
                 "started_at": job.get("started_at", time.time())
             }
+        
+    # FORCE UPDATE to prove thread is alive (2%)
+    update_progress(2.0)
 
     try:
         MAX_ANALYSIS_SEC = float(os.getenv("MAX_ANALYSIS_SEC", "120"))
         CHUNK_SEC = float(os.getenv("CHUNK_SEC", "30"))
 
-        # 全体長（ここではロードしない）
-        total_duration = float(librosa.get_duration(filename=file_path))
-        target_sec = min(total_duration, MAX_ANALYSIS_SEC)
-
-        total_chunks = int(math.ceil(target_sec / CHUNK_SEC)) if target_sec > 0 else 0
-        if total_chunks == 0:
-            raise HTTPException(status_code=400, detail="Audio duration too short")
-
+        # 3) Remove initial get_duration to avoid "decode stall"
+        # We process until MAX_ANALYSIS_SEC or EOF
+        
         bpm = 120.0
         seconds_per_beat = 60.0 / bpm
         segment_duration = seconds_per_beat * 2  # beats_per_segment=2 → 1秒
@@ -726,25 +734,31 @@ def run_analysis_bg(job_id: str, file_path: str):
         all_chords: list[dict] = []
         key_votes: list[str] = []
 
-        # チャンク単位で全体進捗を配分
-        def make_chunk_progress_cb(chunk_idx: int):
-            base = (chunk_idx / total_chunks) * 100.0
-            span = 100.0 / total_chunks
+        chunk_idx = 0
+        offset = 0.0
+        
+        # Estimate total chunks for progress calculation (assuming MAX)
+        # This is an approximation since we might stop early, but ensures 0-100 scale
+        estimated_total_chunks = int(math.ceil(MAX_ANALYSIS_SEC / CHUNK_SEC))
 
-            def cb(p_in_chunk: float):
-                # analyze_audio_file は 0〜100 前提なので 0〜1 に正規化して全体へ
-                p01 = max(0.0, min(100.0, p_in_chunk)) / 100.0
-                update_progress(base + p01 * span)
+        while offset < MAX_ANALYSIS_SEC:
+            dur = min(CHUNK_SEC, MAX_ANALYSIS_SEC - offset)
+            
+            # Progress calculation based on estimated max duration
+            base = (chunk_idx / estimated_total_chunks) * 100.0
+            span = 100.0 / estimated_total_chunks
+            
+            # FORCE UPDATE before heavy chunk processing (monotonic: base + 1%)
+            update_progress(base + 1.0)
 
-            return cb
+            def make_chunk_progress_cb():
+                def cb(p_in_chunk: float):
+                    # analyze_audio_file 0-100 -> normalize 0-1 -> span
+                    p01 = max(0.0, min(100.0, p_in_chunk)) / 100.0
+                    update_progress(base + p01 * span)
+                return cb
 
-        for chunk_idx in range(total_chunks):
-            offset = chunk_idx * CHUNK_SEC
-            dur = min(CHUNK_SEC, target_sec - offset)
-            if dur <= 0:
-                break
-
-            chunk_cb = make_chunk_progress_cb(chunk_idx)
+            chunk_cb = make_chunk_progress_cb()
 
             raw = analyze_audio_file(
                 file_path,
@@ -753,16 +767,21 @@ def run_analysis_bg(job_id: str, file_path: str):
                 duration_limit_sec=dur
             )
 
-            # raw["duration_sec"] は “チャンク内長” なので、絶対秒へ変換して結合
+            # Check for effective end of file (short read)
+            actual_dur = raw["duration_sec"]
+            
             chunk_bars = raw["bars"]
             key_votes.append(raw.get("key", "Unknown"))
 
             for i, bar in enumerate(chunk_bars):
                 start_sec = offset + i * segment_duration
+                
+                # Check bounds against actual chunk duration
+                chunk_end_abs = offset + actual_dur
+                
+                # Setup this segment's end
                 end_sec = offset + (i + 1) * segment_duration
-
-                # チャンク末尾は実際の dur でクリップ
-                chunk_end_abs = offset + raw["duration_sec"]
+                
                 if start_sec >= chunk_end_abs:
                     break
                 if end_sec > chunk_end_abs:
@@ -776,7 +795,7 @@ def run_analysis_bg(job_id: str, file_path: str):
                     "confidence": 1.0
                 }
 
-                # チャンク境界の同一コードを結合
+                # Combine identical adjacent chords at chunk boundaries
                 if all_chords and all_chords[-1]["name"] == name:
                     if abs(all_chords[-1]["endSec"] - item["startSec"]) < 0.06:
                         all_chords[-1]["endSec"] = item["endSec"]
@@ -785,13 +804,22 @@ def run_analysis_bg(job_id: str, file_path: str):
                 else:
                     all_chords.append(item)
 
-        # key は先頭チャンクのキーを採用（安定性のため）
+            # Check exit conditions
+            # If we got significantly less audio than requested, we hit EOF
+            if actual_dur < (dur - 0.5) or actual_dur <= 0.1:
+                offset += actual_dur
+                break
+            
+            offset += dur
+            chunk_idx += 1
+
+        # key matches first chunk
         key = key_votes[0] if key_votes else "Unknown"
 
         final_result = {
             "chords": all_chords,
             "meta": {
-                "durationSec": round(target_sec, 1),
+                "durationSec": round(offset, 1),
                 "bpm": bpm,
                 "key": key
             }
