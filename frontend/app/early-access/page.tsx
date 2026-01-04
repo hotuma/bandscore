@@ -272,8 +272,9 @@ export default function EarlyAccessPage() {
                 setProgress(p);
 
                 // STARTUP CHECK (Correction 2)
-                // If 15s passed and progress is still < 1%, assume thread never started (Render killed it)
-                if (p < 1 && (Date.now() - submittedAt > 15000)) {
+                // If 15s passed and server hasn't acknowledged start (no started_at), assume thread died
+                const startedAt = data.started_at;
+                if (!startedAt && (Date.now() - submittedAt > 15000)) {
                     throw new Error("JOB_NOT_STARTED");
                 }
 
@@ -291,7 +292,7 @@ export default function EarlyAccessPage() {
                 if (jobStatus === "error") throw new Error("ANALYSIS_FAILED_BG");
                 if (jobStatus === "done") {
                     // Fetch Result
-                    const r = await fetch(`${base}/analyze/result/${jobId}`);
+                    const r = await fetch(`${base}/analyze/result/${jobId}`, { signal });
                     if (!r.ok) throw new Error("RESULT_FETCH_FAILED");
                     const resultData: AnalysisResponse = await r.json();
 
@@ -366,6 +367,7 @@ export default function EarlyAccessPage() {
             // Connect to Backend
             const base = process.env.NEXT_PUBLIC_API_BASE_URL;
             const url = `${base}/analyze`;
+            const submittedAt = Date.now();
             console.log("Submitting job to:", url);
 
             const res = await fetch(url, {
@@ -390,7 +392,7 @@ export default function EarlyAccessPage() {
             console.log("Job started:", job_id);
 
             // Start Polling
-            pollJob(job_id, controller.signal, Date.now());
+            pollJob(job_id, controller.signal, submittedAt);
 
         } catch (err: any) {
             if (err.name === "AbortError") return;
@@ -764,13 +766,13 @@ export default function EarlyAccessPage() {
                             />
                             <div className="flex justify-between text-xs text-neutral-500 px-2 mt-2 font-mono">
                                 <span>{formatTime(currentTime)}</span>
-                                <span>{meta?.bpm ? `${Math.round(meta.bpm)} BPM` : 'Unknown BPM'} • {meta?.key || 'Unknown Key'}</span>
+                                <span>{meta?.bpm ? `${Math.round(meta.bpm)} BPM` : 'Unknown BPM'} • <span translate="no" className="notranslate">{meta?.key || 'Unknown Key'}</span></span>
                                 <span>{formatTime(meta?.durationSec || 0)}</span>
                             </div>
                         </div>
 
                         {/* Chord Timeline (Grid) */}
-                        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2">
+                        <div translate="no" className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2 notranslate">
                             {chords.map((chord, idx) => {
                                 const isActive = currentTime >= chord.startSec && currentTime < chord.endSec;
                                 const isEditing = editingIndex === idx;
@@ -818,7 +820,8 @@ export default function EarlyAccessPage() {
                                             />
                                         ) : (
                                             <span
-                                                className={`text-xl font-bold block cursor-pointer hover:text-teal-400 ${isActive ? 'text-teal-300' : 'text-neutral-200'}`}
+                                                translate="no"
+                                                className={`notranslate text-xl font-bold block cursor-pointer hover:text-teal-400 ${isActive ? 'text-teal-300' : 'text-neutral-200'}`}
                                                 onClick={(e) => {
                                                     e.stopPropagation();
                                                     e.preventDefault(); // Prevent Seek

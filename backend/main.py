@@ -688,7 +688,7 @@ def run_analysis_bg(job_id: str, file_path: str):
     # Init progress
     jobs[job_id] = {
         **jobs.get(job_id, {}),
-        "status": "processing",
+        "status": "analyzing",
         # Use 0.01 (1%) as "Started" signal. 0.0 might be confused with "not started"
         "progress": 0.01, 
         "updated_at": time.time(),
@@ -850,7 +850,7 @@ async def analyze(file: UploadFile = File(...), background_tasks: BackgroundTask
     job_id = str(uuid.uuid4())
     now = time.time()
     jobs[job_id] = {
-        "status": "processing",
+        "status": "analyzing",
         "submitted_at": now,
         "expires_at": now + JOB_TTL_SEC,
     }
@@ -935,7 +935,7 @@ async def analyze_url(
         job_id = str(uuid.uuid4())
         now = time.time()
         jobs[job_id] = {
-            "status": "processing",
+            "status": "analyzing",
             "submitted_at": now,
             "expires_at": now + JOB_TTL_SEC,
         }

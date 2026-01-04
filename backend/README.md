@@ -45,3 +45,11 @@ Analyzes an uploaded audio file and returns BPM, duration, and chords.
   ]
 }
 ```
+
+## Analysis Limits (Render)
+
+This app uses chunk-based audio analysis to support long tracks safely on Render.
+
+Environment variables:
+- `MAX_ANALYSIS_SEC`: Max seconds to analyze (e.g. 120 for Free, 600 for EA)
+- `CHUNK_SEC`: Chunk duration in seconds (default: 30)
