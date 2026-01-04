@@ -766,7 +766,11 @@ export default function EarlyAccessPage() {
                             />
                             <div className="flex justify-between text-xs text-neutral-500 px-2 mt-2 font-mono">
                                 <span>{formatTime(currentTime)}</span>
-                                <span>{meta?.bpm ? `${Math.round(meta.bpm)} BPM` : 'Unknown BPM'} • <span translate="no" className="notranslate">{meta?.key || 'Unknown Key'}</span></span>
+                                <div className="flex items-center space-x-2">
+                                    <span>{meta?.bpm ? `${Math.round(meta.bpm)} BPM` : 'Unknown BPM'}</span>
+                                    <span>•</span>
+                                    <span translate="no" lang="en" className="notranslate font-bold text-neutral-400">{meta?.key || 'Unknown Key'}</span>
+                                </div>
                                 <span>{formatTime(meta?.durationSec || 0)}</span>
                             </div>
                         </div>
@@ -821,6 +825,7 @@ export default function EarlyAccessPage() {
                                         ) : (
                                             <span
                                                 translate="no"
+                                                lang="en"
                                                 className={`notranslate text-xl font-bold block cursor-pointer hover:text-teal-400 ${isActive ? 'text-teal-300' : 'text-neutral-200'}`}
                                                 onClick={(e) => {
                                                     e.stopPropagation();

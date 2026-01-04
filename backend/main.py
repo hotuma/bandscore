@@ -227,11 +227,11 @@ def estimate_key_from_chroma(chroma: np.ndarray) -> tuple[str, str]:
         if maj_score > best_score:
             best_score = maj_score
             best_root = i
-            best_mode = "maj"
+            best_mode = ""
         if min_score > best_score:
             best_score = min_score
             best_root = i
-            best_mode = "min"
+            best_mode = "m"
 
     return NOTE_NAMES[best_root], best_mode
 
@@ -242,7 +242,7 @@ def get_diatonic_chords_for_key(root_name: str, mode: str) -> list[str]:
     root_index = NOTE_NAMES.index(root_name)
     major_scale_degrees = [0, 2, 4, 5, 7, 9, 11]
 
-    if mode == "maj":
+    if mode == "maj" or mode == "":
         degrees = major_scale_degrees
         # I, ii, iii, IV, V, vi, vii°(dim -> m for simplicity)
         qualities = ["", "m", "m", "", "", "m", "m"]
@@ -604,7 +604,7 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
 
         # 6. Key estimation
         key_root, key_mode = estimate_key_from_chroma(chroma)
-        estimated_key = f"{key_root} {key_mode}"
+        estimated_key = f"{key_root}{key_mode}"
         print(f"[DEBUG] Key: {estimated_key}")
 
         # 7. Diatonic penalty
