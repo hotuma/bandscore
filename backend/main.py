@@ -17,9 +17,10 @@ import yt_dlp
 from yt_dlp.utils import DownloadError
 import time
 import uuid
-from typing import List, Dict, Optional, Any
+import threading
 from scipy.signal import butter, sosfilt
 from collections import Counter
+from typing import Dict, Any, Optional
 
 app = FastAPI()
 
@@ -128,7 +129,7 @@ def compute_chroma_log(y: np.ndarray, sr: int, hop_length: int = 2048) -> np.nda
     Returns: (12, T)
     """
     # STFT-based chroma (Numba/JIT依存が小さく、Renderで安定しやすい)
-    n_fft = 4096
+    n_fft = 2048
     chroma = librosa.feature.chroma_stft(y=y, sr=sr, hop_length=hop_length, n_fft=n_fft)
 
     # Log compression: log(1 + k * chroma)
@@ -532,7 +533,7 @@ def download_youtube_audio(url: str, cookie_path: str | None = None) -> str:
                 )
             raise e
 
-def analyze_audio_file(file_path: str, progress_callback=None) -> dict:
+def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float = 0.0, duration_limit_sec: float | None = None) -> dict:
     """Core analysis logic reusable for both uploads and URLs."""
     
     def _progress(p: float):
@@ -542,15 +543,19 @@ def analyze_audio_file(file_path: str, progress_callback=None) -> dict:
             except Exception:
                 pass
 
-    print(f"[DEBUG] Starting analysis for {file_path}")
+    print(f"[DEBUG] Starting analysis for {file_path} (offset={offset_sec}, dur={duration_limit_sec})")
     print(f"mem start: {mem_mb():.1f} MB")
     _progress(5) # Start
 
     try:
         # 1. Load & Preprocess
         # LIMIT DURATION to 2 minutes for stability (Render 502/OOM fix)
-        MAX_ANALYSIS_SEC = 120.0
-        y, sr = librosa.load(file_path, sr=22050, mono=True, duration=MAX_ANALYSIS_SEC)
+        MAX_ANALYSIS_SEC = float(os.getenv("MAX_ANALYSIS_SEC", "120"))
+
+        # チャンク長の決定：duration_limit_sec が来ていれば優先、なければ MAX_ANALYSIS_SEC
+        load_dur = duration_limit_sec if duration_limit_sec is not None else MAX_ANALYSIS_SEC
+
+        y, sr = librosa.load(file_path, sr=22050, mono=True, offset=float(offset_sec), duration=float(load_dur))
         print(f"mem after load: {mem_mb():.1f} MB")
         _progress(20) # Loaded
         
@@ -562,17 +567,17 @@ def analyze_audio_file(file_path: str, progress_callback=None) -> dict:
         duration_sec = float(librosa.get_duration(y=y, sr=sr))
         print(f"[DEBUG] Audio duration: {duration_sec}s")
 
-        # 2. Beat tracking
-        print("[DEBUG] Beat tracking...")
-        tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
-        val = float(tempo) if np.ndim(tempo) == 0 else float(tempo[0])
-        bpm = round(val, 2)
-        print(f"[DEBUG] BPM: {bpm}, Beats detected: {len(beat_frames)}")
-        _progress(35) # Beat tracking done
+        # 2. Beat tracking (Removed for speed/stability)
+        # Using fixed 0.5s segments (120 BPM)
+        bpm = 120.0
+        print(f"[DEBUG] Using fixed grid (BPM: {bpm})")
+        # _progress(35) # Skip beat track progress
+        beat_frames = [] # Unused
+        _progress(35)
 
         # 3. Chroma
         print("[DEBUG] Computing chroma...")
-        hop_length = 2048
+        hop_length = 4096
         chroma = compute_chroma_log(y, sr, hop_length=hop_length)
         print(f"mem after chroma: {mem_mb():.1f} MB")
         
@@ -586,7 +591,8 @@ def analyze_audio_file(file_path: str, progress_callback=None) -> dict:
             raise ValueError("Chroma extraction failed or audio too short")
 
         # 4. Time axes
-        beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=512)
+        # Fixed 0.5s intervals for 120 beats
+        beat_times = np.arange(0, duration_sec, 0.5)
         times = librosa.frames_to_time(np.arange(chroma.shape[1]), sr=sr, hop_length=hop_length)
 
         # 5. Aggregate per segment
@@ -629,8 +635,8 @@ def analyze_audio_file(file_path: str, progress_callback=None) -> dict:
         bars = []
         for i, chord_name in enumerate(smoothed_chords):
             # Granular progress for final loop (90 -> 99)
-            if len(smoothed_chords) > 0 and i % 20 == 0:
-                 progress_percent = 90 + 9 * (i / len(smoothed_chords))
+            if len(smoothed_chords) > 0:
+                 progress_percent = 90 + 9 * ((i + 1) / len(smoothed_chords))
                  _progress(progress_percent)
 
             tab = chord_to_tab(chord_name)
@@ -683,8 +689,10 @@ def run_analysis_bg(job_id: str, file_path: str):
     jobs[job_id] = {
         **jobs.get(job_id, {}),
         "status": "processing",
-        "progress": 0.0, 
-        "updated_at": time.time()
+        # Use 0.01 (1%) as "Started" signal. 0.0 might be confused with "not started"
+        "progress": 0.01, 
+        "updated_at": time.time(),
+        "started_at": time.time()
     }
 
     def update_progress(p: float):
@@ -696,38 +704,96 @@ def run_analysis_bg(job_id: str, file_path: str):
                 **job,
                 "progress": p,
                 "updated_at": time.time(),
+                "started_at": job.get("started_at", time.time())
             }
 
     try:
-        raw_result = analyze_audio_file(file_path, progress_callback=update_progress)
+        MAX_ANALYSIS_SEC = float(os.getenv("MAX_ANALYSIS_SEC", "120"))
+        CHUNK_SEC = float(os.getenv("CHUNK_SEC", "30"))
 
-        # Transformation Logic (formerly in endpoint) to match frontend contract
-        bpm = raw_result["bpm"]
-        seconds_per_beat = 60.0 / bpm if bpm > 0 else 0.5
-        segment_duration = seconds_per_beat * 2
-        
-        chords_list = []
-        for i, bar in enumerate(raw_result["bars"]):
-            start_sec = i * segment_duration
-            end_sec = (i + 1) * segment_duration
-            if start_sec > raw_result["duration_sec"]:
+        # 全体長（ここではロードしない）
+        total_duration = float(librosa.get_duration(filename=file_path))
+        target_sec = min(total_duration, MAX_ANALYSIS_SEC)
+
+        total_chunks = int(math.ceil(target_sec / CHUNK_SEC)) if target_sec > 0 else 0
+        if total_chunks == 0:
+            raise HTTPException(status_code=400, detail="Audio duration too short")
+
+        bpm = 120.0
+        seconds_per_beat = 60.0 / bpm
+        segment_duration = seconds_per_beat * 2  # beats_per_segment=2 → 1秒
+
+        all_chords: list[dict] = []
+        key_votes: list[str] = []
+
+        # チャンク単位で全体進捗を配分
+        def make_chunk_progress_cb(chunk_idx: int):
+            base = (chunk_idx / total_chunks) * 100.0
+            span = 100.0 / total_chunks
+
+            def cb(p_in_chunk: float):
+                # analyze_audio_file は 0〜100 前提なので 0〜1 に正規化して全体へ
+                p01 = max(0.0, min(100.0, p_in_chunk)) / 100.0
+                update_progress(base + p01 * span)
+
+            return cb
+
+        for chunk_idx in range(total_chunks):
+            offset = chunk_idx * CHUNK_SEC
+            dur = min(CHUNK_SEC, target_sec - offset)
+            if dur <= 0:
                 break
-            if end_sec > raw_result["duration_sec"]:
-                end_sec = raw_result["duration_sec"]
-                
-            chords_list.append({
-                "startSec": round(start_sec, 3),
-                "endSec": round(end_sec, 3),
-                "name": bar["chord"],
-                "confidence": 1.0 
-            })
+
+            chunk_cb = make_chunk_progress_cb(chunk_idx)
+
+            raw = analyze_audio_file(
+                file_path,
+                progress_callback=chunk_cb,
+                offset_sec=offset,
+                duration_limit_sec=dur
+            )
+
+            # raw["duration_sec"] は “チャンク内長” なので、絶対秒へ変換して結合
+            chunk_bars = raw["bars"]
+            key_votes.append(raw.get("key", "Unknown"))
+
+            for i, bar in enumerate(chunk_bars):
+                start_sec = offset + i * segment_duration
+                end_sec = offset + (i + 1) * segment_duration
+
+                # チャンク末尾は実際の dur でクリップ
+                chunk_end_abs = offset + raw["duration_sec"]
+                if start_sec >= chunk_end_abs:
+                    break
+                if end_sec > chunk_end_abs:
+                    end_sec = chunk_end_abs
+
+                name = bar["chord"]
+                item = {
+                    "startSec": round(start_sec, 3),
+                    "endSec": round(end_sec, 3),
+                    "name": name,
+                    "confidence": 1.0
+                }
+
+                # チャンク境界の同一コードを結合
+                if all_chords and all_chords[-1]["name"] == name:
+                    if abs(all_chords[-1]["endSec"] - item["startSec"]) < 0.06:
+                        all_chords[-1]["endSec"] = item["endSec"]
+                    else:
+                        all_chords.append(item)
+                else:
+                    all_chords.append(item)
+
+        # key は先頭チャンクのキーを採用（安定性のため）
+        key = key_votes[0] if key_votes else "Unknown"
 
         final_result = {
-            "chords": chords_list,
+            "chords": all_chords,
             "meta": {
-                "durationSec": raw_result["duration_sec"],
+                "durationSec": round(target_sec, 1),
                 "bpm": bpm,
-                "key": raw_result["key"]
+                "key": key
             }
         }
 
@@ -739,13 +805,17 @@ def run_analysis_bg(job_id: str, file_path: str):
             "result": final_result,
         }
     except Exception as e:
-        print(f"[ERROR] BG Analysis failed: {e}")
+        # Catch-all for thread safety
+        print(f"[ERROR] Thread crashed: {e}")
+        import traceback
+        traceback.print_exc()
         jobs[job_id] = {
             **jobs.get(job_id, {}),
             "status": "error",
             "done_at": time.time(),
             "error": str(e),
         }
+
     finally:
         try:
             if os.path.exists(file_path):
@@ -792,7 +862,9 @@ async def analyze(file: UploadFile = File(...), background_tasks: BackgroundTask
     with open(file_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
-    background_tasks.add_task(run_analysis_bg, job_id, file_path)
+    # Use Thread instead of BackgroundTasks for better survival on Render free tier
+    # (BackgroundTasks are tied to request lifecycle, Thread is slightly more detached)
+    threading.Thread(target=run_analysis_bg, args=(job_id, file_path)).start()
 
     return JSONResponse(status_code=202, content={"job_id": job_id})
 
@@ -804,7 +876,8 @@ def analyze_status(job_id: str):
         raise HTTPException(status_code=404, detail="job not found")
     return {
         "status": job.get("status"),
-        "updated_at": job.get("done_at") or job.get("submitted_at"),
+        "updated_at": job.get("updated_at") or job.get("done_at") or job.get("submitted_at"),
+        "started_at": job.get("started_at"),
         "progress": job.get("progress", 0.0),
         "error": job.get("error")
     }
@@ -867,9 +940,8 @@ async def analyze_url(
             "expires_at": now + JOB_TTL_SEC,
         }
         
-        # The file is already at file_path (in TEMP_DIR).
-        # We just need to register the BG task.
-        background_tasks.add_task(run_analysis_bg, job_id, file_path)
+        # Threading for URL analysis too
+        threading.Thread(target=run_analysis_bg, args=(job_id, file_path)).start()
         
         return JSONResponse(status_code=202, content={"job_id": job_id})
 

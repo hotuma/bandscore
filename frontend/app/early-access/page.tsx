@@ -245,7 +245,7 @@ export default function EarlyAccessPage() {
         }
     };
 
-    const pollJob = async (jobId: string, signal: AbortSignal) => {
+    const pollJob = async (jobId: string, signal: AbortSignal, submittedAt: number) => {
         const base = process.env.NEXT_PUBLIC_API_BASE_URL;
 
         let lastProgress = -1;
@@ -270,6 +270,12 @@ export default function EarlyAccessPage() {
 
                 console.log("progress", p, "status", jobStatus);
                 setProgress(p);
+
+                // STARTUP CHECK (Correction 2)
+                // If 15s passed and progress is still < 1%, assume thread never started (Render killed it)
+                if (p < 1 && (Date.now() - submittedAt > 15000)) {
+                    throw new Error("JOB_NOT_STARTED");
+                }
 
                 // Stalled Check
                 if (p > lastProgress) {
@@ -311,7 +317,7 @@ export default function EarlyAccessPage() {
                 if (signal.aborted || e.name === "AbortError") return;
 
                 console.error("Polling error:", e);
-                if (e.message === "JOB_LOST" || e.message === "JOB_STALLED") {
+                if (e.message === "JOB_LOST" || e.message === "JOB_STALLED" || e.message === "JOB_NOT_STARTED") {
                     setError({
                         code: "SERVER_RESTARTED",
                         message: "サーバーが再起動した可能性があるため、解析が中断されました。もう一度お試しください。"
@@ -384,7 +390,7 @@ export default function EarlyAccessPage() {
             console.log("Job started:", job_id);
 
             // Start Polling
-            pollJob(job_id, controller.signal);
+            pollJob(job_id, controller.signal, Date.now());
 
         } catch (err: any) {
             if (err.name === "AbortError") return;
