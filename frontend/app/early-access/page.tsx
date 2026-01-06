@@ -131,6 +131,10 @@ function InlineHint({ children, className }: { children: React.ReactNode; classN
     );
 }
 
+// Word Joiner (U+2060) Helper: Prevents translation engines from splitting/translating text
+// e.g. "Am" -> "A" + WJ + "m"
+const wj = (s: string) => s.split('').join('\u2060');
+
 export default function EarlyAccessPage() {
     const router = useRouter();
     const [file, setFile] = useState<File | null>(null);
@@ -601,6 +605,9 @@ export default function EarlyAccessPage() {
 
                 {/* HEADER */}
                 <header className="border-b border-neutral-800 pb-6">
+                    <p className="text-xs text-neutral-500 mb-2">
+                        表示が「午前」などに変わる場合は、ブラウザのページ翻訳をOFFにしてください。
+                    </p>
                     <h1 className="text-3xl font-bold bg-gradient-to-r from-teal-400 to-blue-500 bg-clip-text text-transparent">
                         Early Access: Audio Analysis
                     </h1>
@@ -769,7 +776,7 @@ export default function EarlyAccessPage() {
                                 <div className="flex items-center space-x-2">
                                     <span>{meta?.bpm ? `${Math.round(meta.bpm)} BPM` : 'Unknown BPM'}</span>
                                     <span>•</span>
-                                    <span translate="no" lang="en" className="notranslate font-bold text-neutral-400">{meta?.key || 'Unknown Key'}</span>
+                                    <span translate="no" lang="en" className="notranslate font-bold text-neutral-400">{meta?.key ? wj(meta.key) : 'Unknown Key'}</span>
                                 </div>
                                 <span>{formatTime(meta?.durationSec || 0)}</span>
                             </div>
@@ -833,7 +840,7 @@ export default function EarlyAccessPage() {
                                                     startEditing(idx);
                                                 }}
                                             >
-                                                {chord.name}
+                                                {wj(chord.name)}
                                             </span>
                                         )}
 
