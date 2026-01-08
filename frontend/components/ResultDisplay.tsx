@@ -16,7 +16,8 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
     const [currentBarIndex, setCurrentBarIndex] = useState<number>(-1);
     // UI State
     const [isPlaying, setIsPlaying] = useState(false);
-    const requestRef = useRef<number | null>(null);
+    // Refs
+    const rafIdRef = useRef<number | null>(null);
 
     // Auto-scroll suppression
     const suppressScrollRef = useRef<number>(0);
@@ -56,27 +57,88 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
     const secondsPerBeat = 60 / result.bpm;
     const secondsPerBar = secondsPerBeat * beatsPerBar;
 
-    const updateBarIndex = () => {
-        if (audioRef.current) {
-            const currentTime = audioRef.current.currentTime;
-            const effectiveTime = currentTime + offsetSec;
+    // --- Audio Event Listeners (State Management Only) ---
+    useEffect(() => {
+        const audio = audioRef.current;
+        if (!audio) return;
 
-            // Calculate current bar (0-indexed)
-            const index = Math.floor(effectiveTime / secondsPerBar);
+        const onPlay = () => setIsPlaying(true);
+        const onPause = () => setIsPlaying(false);
+        const onEnded = () => {
+            setIsPlaying(false);
+            setCurrentBarIndex(-1);
+        };
 
-            // Clamp index to valid range
-            const clampedIndex = Math.max(0, Math.min(index, result.bars.length - 1));
+        audio.addEventListener('play', onPlay);
+        audio.addEventListener('pause', onPause);
+        audio.addEventListener('ended', onEnded);
 
-            // Only update if changed to avoid excessive re-renders
-            if (effectiveTime > 0 && index < result.bars.length) {
-                setCurrentBarIndex(clampedIndex);
-            } else if (effectiveTime <= 0) {
-                setCurrentBarIndex(-1);
-            }
-
-            requestRef.current = requestAnimationFrame(updateBarIndex);
+        // Initial state check
+        if (!audio.paused && !audio.ended) {
+            setIsPlaying(true);
         }
-    };
+
+        return () => {
+            audio.removeEventListener('play', onPlay);
+            audio.removeEventListener('pause', onPause);
+            audio.removeEventListener('ended', onEnded);
+        };
+    }, [audioUrl]); // Re-bind if audio source changes
+
+    // --- Main Sync Loop (The "King" RAF) ---
+    useEffect(() => {
+        if (!isPlaying) {
+            // Cleanup checks
+            if (rafIdRef.current) {
+                cancelAnimationFrame(rafIdRef.current);
+                rafIdRef.current = null;
+            }
+            return;
+        }
+
+        const loop = () => {
+            if (audioRef.current) {
+                const currentTime = audioRef.current.currentTime;
+                const effectiveTime = currentTime + offsetSec;
+
+                // Calculate current bar (0-indexed)
+                let index = -1;
+
+                if (effectiveTime > 0) {
+                    index = Math.floor(effectiveTime / secondsPerBar);
+                }
+
+                // Clamp index to valid range
+                // Note: allowing index to go beyond bars.length is handled by just not highlighting anything, 
+                // but usually we want to clamp it for safety if we are looking up arrays.
+                // However, if the song is longer than analysis, we might want to just show nothing.
+                // For now, let's clamp strict to bars range or -1 if invalid.
+
+                if (index >= result.bars.length) {
+                    index = result.bars.length - 1; // Or -1 if we want to stop highlighting
+                }
+
+                if (index < 0) {
+                    index = -1;
+                }
+
+                setCurrentBarIndex(prev => {
+                    if (prev !== index) return index;
+                    return prev;
+                });
+            }
+            rafIdRef.current = requestAnimationFrame(loop);
+        };
+
+        rafIdRef.current = requestAnimationFrame(loop);
+
+        return () => {
+            if (rafIdRef.current) {
+                cancelAnimationFrame(rafIdRef.current);
+                rafIdRef.current = null;
+            }
+        };
+    }, [isPlaying, result, offsetSec, secondsPerBar]);
 
     // Auto-scroll effect
     useEffect(() => {
@@ -110,43 +172,6 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
             window.removeEventListener('touchmove', handleScroll);
         }
     }, [isPlaying, autoScroll]);
-
-    useEffect(() => {
-        const audio = audioRef.current;
-        if (!audio) return;
-
-        const onPlay = () => {
-            setIsPlaying(true);
-            requestRef.current = requestAnimationFrame(updateBarIndex);
-        };
-
-        const onPause = () => {
-            setIsPlaying(false);
-            if (requestRef.current) {
-                cancelAnimationFrame(requestRef.current);
-            }
-        };
-
-        const onEnded = () => {
-            if (requestRef.current) {
-                cancelAnimationFrame(requestRef.current);
-            }
-            setCurrentBarIndex(-1);
-        };
-
-        audio.addEventListener('play', onPlay);
-        audio.addEventListener('pause', onPause);
-        audio.addEventListener('ended', onEnded);
-
-        return () => {
-            audio.removeEventListener('play', onPlay);
-            audio.removeEventListener('pause', onPause);
-            audio.removeEventListener('ended', onEnded);
-            if (requestRef.current) {
-                cancelAnimationFrame(requestRef.current);
-            }
-        };
-    }, [result.bpm, offsetSec]); // Re-bind if BPM or offset changes
 
     // Auto Chord Playback
     const chordTimeline = useMemo(() => analysisResultToTimedChords(result), [result]);
