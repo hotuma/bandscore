@@ -131,9 +131,8 @@ function InlineHint({ children, className }: { children: React.ReactNode; classN
     );
 }
 
-// Word Joiner (U+2060) Helper: Prevents translation engines from splitting/translating text
-// e.g. "Am" -> "A" + WJ + "m"
-const wj = (s: string) => s.split('').join('\u2060');
+// CSS Content Hack: The text is put in `data-text` and displayed via `before:content-[attr(data-text)]`
+// This removes the text from the DOM content tree, bypassing most translation engines.
 
 export default function EarlyAccessPage() {
     const router = useRouter();
@@ -776,7 +775,12 @@ export default function EarlyAccessPage() {
                                 <div className="flex items-center space-x-2">
                                     <span>{meta?.bpm ? `${Math.round(meta.bpm)} BPM` : 'Unknown BPM'}</span>
                                     <span>•</span>
-                                    <span translate="no" lang="en" className="notranslate font-bold text-neutral-400">{meta?.key ? wj(meta.key) : 'Unknown Key'}</span>
+                                    <span
+                                        translate="no"
+                                        lang="en"
+                                        className="notranslate font-bold text-neutral-400 before:content-[attr(data-text)]"
+                                        data-text={meta?.key || 'Unknown Key'}
+                                    ></span>
                                 </div>
                                 <span>{formatTime(meta?.durationSec || 0)}</span>
                             </div>
@@ -831,16 +835,14 @@ export default function EarlyAccessPage() {
                                             />
                                         ) : (
                                             <span
-                                                translate="no"
-                                                lang="en"
-                                                className={`notranslate text-xl font-bold block cursor-pointer hover:text-teal-400 ${isActive ? 'text-teal-300' : 'text-neutral-200'}`}
+                                                data-text={chord.name}
+                                                className={`notranslate text-xl font-bold block cursor-pointer hover:text-teal-400 before:content-[attr(data-text)] ${isActive ? 'text-teal-300' : 'text-neutral-200'}`}
                                                 onClick={(e) => {
                                                     e.stopPropagation();
                                                     e.preventDefault(); // Prevent Seek
                                                     startEditing(idx);
                                                 }}
                                             >
-                                                {wj(chord.name)}
                                             </span>
                                         )}
 
