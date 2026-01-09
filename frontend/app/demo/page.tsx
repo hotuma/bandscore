@@ -376,55 +376,64 @@ export default function DemoPage() {
         </div>
       </div>
 
+      {/* Footer */}
+      <div className="text-center pt-8 pb-4">
+        <a href="/legal" className="text-xs text-gray-400 hover:text-gray-600 underline">
+          特定商取引法に基づく表記
+        </a>
+      </div>
+
       {/* Fixed Bottom Controls */}
-      {activeSong && (
-        <div className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur border-t border-gray-200 p-4 pb-6 sm:p-4 z-50">
-          <div className="max-w-md mx-auto flex items-center justify-between gap-4">
-            {/* Stop */}
-            <button
-              onClick={() => {
-                if (playerRef.current && typeof playerRef.current.pauseVideo === 'function') {
-                  playerRef.current.pauseVideo();
-                  playerRef.current.seekTo(0, true);
-                }
-                suppressScrollRef.current = Date.now() + 1000;
-              }}
-              className="p-3 rounded-full bg-red-100 text-red-600 hover:bg-red-200 transition-colors"
-            >
-              <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M6 6h12v12H6z" /></svg>
-            </button>
-
-            {/* Play/Pause */}
-            <button
-              onClick={() => {
-                if (playerRef.current && typeof playerRef.current.getPlayerState === 'function') {
-                  const state = playerRef.current.getPlayerState();
-                  if (state === 1) { // Playing
+      {
+        activeSong && (
+          <div className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur border-t border-gray-200 p-4 pb-6 sm:p-4 z-50">
+            <div className="max-w-md mx-auto flex items-center justify-between gap-4">
+              {/* Stop */}
+              <button
+                onClick={() => {
+                  if (playerRef.current && typeof playerRef.current.pauseVideo === 'function') {
                     playerRef.current.pauseVideo();
-                  } else {
-                    playerRef.current.playVideo();
+                    playerRef.current.seekTo(0, true);
                   }
-                  suppressScrollRef.current = Date.now() + 500;
-                }
-              }}
-              className="flex-1 bg-blue-600 text-white rounded-xl py-3 font-bold shadow-lg hover:bg-blue-700 active:scale-95 transition-all text-center"
-            >
-              {isPlaying ? 'PAUSE' : 'PLAY'}
-            </button>
+                  suppressScrollRef.current = Date.now() + 1000;
+                }}
+                className="p-3 rounded-full bg-red-100 text-red-600 hover:bg-red-200 transition-colors"
+              >
+                <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M6 6h12v12H6z" /></svg>
+              </button>
 
-            {/* Auto Scroll */}
-            <button
-              onClick={() => {
-                setAutoScroll(!autoScroll);
-                suppressScrollRef.current = Date.now() + 500;
-              }}
-              className={`p-3 rounded-full transition-colors ${autoScroll ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-400'}`}
-            >
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" /></svg>
-            </button>
+              {/* Play/Pause */}
+              <button
+                onClick={() => {
+                  if (playerRef.current && typeof playerRef.current.getPlayerState === 'function') {
+                    const state = playerRef.current.getPlayerState();
+                    if (state === 1) { // Playing
+                      playerRef.current.pauseVideo();
+                    } else {
+                      playerRef.current.playVideo();
+                    }
+                    suppressScrollRef.current = Date.now() + 500;
+                  }
+                }}
+                className="flex-1 bg-blue-600 text-white rounded-xl py-3 font-bold shadow-lg hover:bg-blue-700 active:scale-95 transition-all text-center"
+              >
+                {isPlaying ? 'PAUSE' : 'PLAY'}
+              </button>
+
+              {/* Auto Scroll */}
+              <button
+                onClick={() => {
+                  setAutoScroll(!autoScroll);
+                  suppressScrollRef.current = Date.now() + 500;
+                }}
+                className={`p-3 rounded-full transition-colors ${autoScroll ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-400'}`}
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" /></svg>
+              </button>
+            </div>
           </div>
-        </div>
-      )}
-    </main>
+        )
+      }
+    </main >
   );
 }
