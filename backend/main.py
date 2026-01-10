@@ -731,7 +731,7 @@ def run_analysis_bg(job_id: str, file_path: str):
         seconds_per_beat = 60.0 / bpm
         segment_duration = seconds_per_beat * 2  # beats_per_segment=2 → 1秒
 
-        all_chords: list[dict] = []
+        all_bars: list[dict] = []
         key_votes: list[str] = []
 
         chunk_idx = 0
@@ -787,22 +787,14 @@ def run_analysis_bg(job_id: str, file_path: str):
                 if end_sec > chunk_end_abs:
                     end_sec = chunk_end_abs
 
-                name = bar["chord"]
-                item = {
-                    "startSec": round(start_sec, 3),
-                    "endSec": round(end_sec, 3),
-                    "name": name,
-                    "confidence": 1.0
+                # No merging, strictly append grid items
+                # Frontend expects "bars" list where index corresponds to time slot
+                bar_obj = {
+                    "bar": len(all_bars) + 1,
+                    "chord": bar["chord"],
+                    "tab": bar.get("tab")
                 }
-
-                # Combine identical adjacent chords at chunk boundaries
-                if all_chords and all_chords[-1]["name"] == name:
-                    if abs(all_chords[-1]["endSec"] - item["startSec"]) < 0.06:
-                        all_chords[-1]["endSec"] = item["endSec"]
-                    else:
-                        all_chords.append(item)
-                else:
-                    all_chords.append(item)
+                all_bars.append(bar_obj)
 
             # Check exit conditions
             # If we got significantly less audio than requested, we hit EOF
@@ -817,12 +809,11 @@ def run_analysis_bg(job_id: str, file_path: str):
         key = key_votes[0] if key_votes else "Unknown"
 
         final_result = {
-            "chords": all_chords,
-            "meta": {
-                "durationSec": round(offset, 1),
-                "bpm": bpm,
-                "key": key
-            }
+            "bpm": bpm,
+            "duration_sec": round(offset, 1),
+            "time_signature": "2/4",
+            "key": key,
+            "bars": all_bars
         }
 
         jobs[job_id] = {

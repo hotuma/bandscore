@@ -50,12 +50,13 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
         return `${min}:${sec.toString().padStart(2, '0')}`;
     };
 
-    // Calculate seconds per bar
-    // Parse time signature (e.g. "4/4", "2/4")
-    const timeSigParts = result.time_signature.split('/');
-    const beatsPerBar = parseInt(timeSigParts[0], 10) || 4;
-    const secondsPerBeat = 60 / result.bpm;
-    const secondsPerBar = secondsPerBeat * beatsPerBar;
+    // Calculate seconds per bar robustly (Total Duration / Number of Bars)
+    // This relies on the backend returning a fixed-grid "bars" array.
+    const secondsPerBar = useMemo(() => {
+        const n = result.bars?.length ?? 0;
+        if (!n || !result.duration_sec) return 1;
+        return result.duration_sec / n;
+    }, [result.duration_sec, result.bars?.length]);
 
     // --- Audio Event Listeners (State Management Only) ---
     useEffect(() => {
@@ -323,7 +324,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                 <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-2">
                     {result.bars.map((bar, index) => (
                         <div
-                            key={bar.bar}
+                            key={`${index}-${bar.bar}-${bar.chord}`}
                             onClick={() => handleBarClick(index)}
                             className={`flex flex-col items-center p-2 rounded border cursor-pointer transition-colors duration-200 ${index === currentBarIndex
                                 ? 'bg-blue-600 border-blue-600 text-white shadow-md scale-110 transform z-10'
@@ -343,7 +344,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {result.bars.map((bar, index) => (
                         <div
-                            key={bar.bar}
+                            key={`${index}-${bar.bar}-${bar.chord}`}
                             ref={el => { barRefs.current[index] = el; }}
                             onClick={() => handleBarClick(index)}
                             className={`rounded-xl border shadow-sm overflow-hidden transition-all duration-200 cursor-pointer ${index === currentBarIndex
