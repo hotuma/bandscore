@@ -181,8 +181,17 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
     }, [isPlaying, autoScroll]);
 
     // Auto Chord Playback
-    const chordTimeline = useMemo(() => analysisResultToTimedChords(result), [result]);
-    useAutoChordPlayback(audioRef.current, chordTimeline, autoChord, offsetSec);
+    const chordTimeline = useMemo(() => {
+        try {
+            // result.bars を必ず bars(=配列)で上書きして渡す
+            return analysisResultToTimedChords({ ...result, bars });
+        } catch (e) {
+            console.error("analysisResultToTimedChords failed:", e);
+            return [];
+        }
+    }, [result, bars]);
+
+    useAutoChordPlayback(audioRef.current, chordTimeline ?? [], autoChord, offsetSec);
 
     // Initialize Volume
     useMemo(() => {
