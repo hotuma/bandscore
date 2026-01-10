@@ -50,13 +50,17 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
         return `${min}:${sec.toString().padStart(2, '0')}`;
     };
 
+    // Safe bars access
+    const bars = useMemo(() => result?.bars ?? [], [result]);
+
     // Calculate seconds per bar robustly (Total Duration / Number of Bars)
     // This relies on the backend returning a fixed-grid "bars" array.
     const secondsPerBar = useMemo(() => {
-        const n = result.bars?.length ?? 0;
-        if (!n || !result.duration_sec) return 1;
-        return result.duration_sec / n;
-    }, [result.duration_sec, result.bars?.length]);
+        const n = bars.length;
+        const dur = result?.duration_sec ?? 0;
+        if (!n || !dur || !Number.isFinite(dur)) return 1;
+        return dur / n;
+    }, [bars.length, result?.duration_sec]);
 
     // --- Audio Event Listeners (State Management Only) ---
     useEffect(() => {
@@ -115,8 +119,10 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                 // However, if the song is longer than analysis, we might want to just show nothing.
                 // For now, let's clamp strict to bars range or -1 if invalid.
 
-                if (index >= result.bars.length) {
-                    index = result.bars.length - 1; // Or -1 if we want to stop highlighting
+                if (bars.length === 0) {
+                    index = -1;
+                } else if (index >= bars.length) {
+                    index = bars.length - 1;
                 }
 
                 if (index < 0) {
@@ -139,7 +145,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                 rafIdRef.current = null;
             }
         };
-    }, [isPlaying, result, offsetSec, secondsPerBar]);
+    }, [isPlaying, result, offsetSec, secondsPerBar, bars]);
 
     // Auto-scroll effect
     useEffect(() => {
@@ -184,7 +190,8 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
     }, []);
 
     const handleBarClick = (barIndex: number) => {
-        const bar = result.bars[barIndex];
+        const bar = bars[barIndex];
+        if (!bar) return;
         const frets = bar.tab?.frets;
 
         console.log("Clicked bar", bar.bar, "chord", bar.chord, "frets", frets);
@@ -314,7 +321,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                 <div className="w-px h-12 bg-gray-100"></div>
                 <div className="text-center">
                     <div className="text-xs text-gray-400 uppercase tracking-wider font-semibold mb-1">Bars</div>
-                    <div className="text-3xl font-black text-gray-800">{result.bars.length}</div>
+                    <div className="text-3xl font-black text-gray-800">{bars.length}</div>
                 </div>
             </div>
 
@@ -322,7 +329,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
             <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
                 <h3 className="text-sm font-bold text-gray-400 uppercase mb-4 tracking-wider">Chord Progression</h3>
                 <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-2">
-                    {result.bars.map((bar, index) => (
+                    {bars.map((bar, index) => (
                         <div
                             key={`${index}-${bar.bar}-${bar.chord}`}
                             onClick={() => handleBarClick(index)}
@@ -342,7 +349,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
             <div>
                 <h3 className="text-sm font-bold text-gray-400 uppercase mb-4 tracking-wider">Guitar TABs</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {result.bars.map((bar, index) => (
+                    {bars.map((bar, index) => (
                         <div
                             key={`${index}-${bar.bar}-${bar.chord}`}
                             ref={el => { barRefs.current[index] = el; }}
