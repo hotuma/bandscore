@@ -23,7 +23,7 @@ export function useAutoChordPlayback(
     useEffect(() => {
         if (!audioElement) return;
         if (!enabled) return;
-        if (!chordTimeline.length) return;
+        if (!chordTimeline || !chordTimeline.length) return;
 
         let rafId: number;
 
@@ -37,6 +37,7 @@ export function useAutoChordPlayback(
 
             const prevTime = prevTimeRef.current;
             const timeline = chordTimeline;
+            if (!timeline) return;
             const n = timeline.length;
 
             // --- シーク（大きく時間が飛んだ）を検出 ---

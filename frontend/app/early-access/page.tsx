@@ -2,28 +2,13 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Trash2, AlertCircle, Loader2 } from 'lucide-react';
-import { playChordFromTab, setChordVolume } from '../../lib/chordAudio';
+import { Loader2 } from 'lucide-react';
+import ResultDisplay from "../../components/ResultDisplay";
+import { AnalysisResult } from "../../lib/api";
+import { analysisResultToTimedChords } from "../../lib/chordTimeline";
 
 // Types matching Backend Contract
-type Chord = {
-    startSec: number;
-    endSec: number;
-    name: string;
-    confidence: number;
-    frets?: string[]; // Optional if we map it later, but backend currently returns name-only in main list, mapped from bars
-};
 
-type AnalysisMeta = {
-    durationSec: number;
-    bpm: number;
-    key: string;
-};
-
-type AnalysisResponse = {
-    chords: Chord[];
-    meta: AnalysisMeta;
-};
 
 type AppStatus = 'idle' | 'uploading' | 'analyzing' | 'ready' | 'error';
 
@@ -33,32 +18,7 @@ type ErrorState = {
 };
 
 // Mapping from Backend (simplified copy for MVP preview)
-const CHORD_TO_TAB: Record<string, string[]> = {
-    "C": ["x", "3", "2", "0", "1", "0"],
-    "C#": ["x", "4", "6", "6", "6", "4"],
-    "D": ["x", "x", "0", "2", "3", "2"],
-    "D#": ["x", "6", "8", "8", "8", "6"],
-    "E": ["0", "2", "2", "1", "0", "0"],
-    "F": ["1", "3", "3", "2", "1", "1"],
-    "F#": ["2", "4", "4", "3", "2", "2"],
-    "G": ["3", "2", "0", "0", "0", "3"],
-    "G#": ["4", "6", "6", "5", "4", "4"],
-    "A": ["x", "0", "2", "2", "2", "0"],
-    "A#": ["x", "1", "3", "3", "3", "1"],
-    "B": ["x", "2", "4", "4", "4", "2"],
-    "Cm": ["x", "3", "5", "5", "4", "3"],
-    "C#m": ["x", "4", "6", "6", "5", "4"],
-    "Dm": ["x", "x", "0", "2", "3", "1"],
-    "D#m": ["x", "6", "8", "8", "7", "6"],
-    "Em": ["0", "2", "2", "0", "0", "0"],
-    "Fm": ["1", "3", "3", "1", "1", "1"],
-    "F#m": ["2", "4", "4", "2", "2", "2"],
-    "Gm": ["3", "5", "5", "3", "3", "3"],
-    "G#m": ["4", "6", "6", "4", "4", "4"],
-    "Am": ["x", "0", "2", "2", "1", "0"],
-    "A#m": ["x", "1", "3", "3", "2", "1"],
-    "Bm": ["x", "2", "4", "4", "3", "2"],
-};
+
 
 // --- LocalStorage Usage Tracking ---
 type EaUsage = {
@@ -138,12 +98,10 @@ export default function EarlyAccessPage() {
     const router = useRouter();
     const [file, setFile] = useState<File | null>(null);
     const [audioUrl, setAudioUrl] = useState<string | null>(null);
-    const [chords, setChords] = useState<Chord[]>([]);
-    const [meta, setMeta] = useState<AnalysisMeta | null>(null);
+    const [result, setResult] = useState<AnalysisResult | null>(null);
     const [status, setStatus] = useState<AppStatus>('idle');
     const [progress, setProgress] = useState<number>(0); // Added progress state
     const [error, setError] = useState<ErrorState | null>(null);
-    const [currentTime, setCurrentTime] = useState(0);
 
     // Free Tier / CTA State
     const [eaUsage, setEaUsage] = useState<EaUsage>({ analysisCount: 0 });
@@ -192,7 +150,7 @@ export default function EarlyAccessPage() {
         // Advanced from PLAY to EDIT when analysis is ready
         // Note: This makes the "Just listen" step appear during the analysis/idle phase after upload
         if (onboardingStep === "PLAY" && status === "ready") {
-            setOnboardingStep("EDIT");
+            setOnboardingStep("EXPORT");
         }
     }, [onboardingStep, status]);
 
@@ -211,22 +169,16 @@ export default function EarlyAccessPage() {
     }, [ctaOpen, ctaReason]);
 
 
-    // Editing State
-    const [editingIndex, setEditingIndex] = useState<number | null>(null);
+    // Editing State (Removed for ResultDisplay refactor)
+    // Auto Preview & Volume State (Removed for ResultDisplay refactor)
 
-    // Auto Preview & Volume State
-    const [autoPreview, setAutoPreview] = useState(false);
-    const [sourceVolume, setSourceVolume] = useState(0.5);
-    const [chordVolume, setChordVolumeState] = useState(0.5);
-
-    const prevChordIndexRef = useRef<number>(-1);
-    const audioRef = useRef<HTMLAudioElement>(null);
+    // Refs
     const fileInputRef = useRef<HTMLInputElement>(null);
     const abortPollingRef = useRef<AbortController | null>(null);
 
     // Constants
     const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
-    const ALLOWED_TYPES = ['audio/mpeg', 'audio/wav', 'audio/x-m4a', 'audio/mp4', 'audio/x-wav'];
+
 
     const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
@@ -243,8 +195,7 @@ export default function EarlyAccessPage() {
             setError(null);
             setStatus('idle');
             setProgress(0);
-            setChords([]);
-            setMeta(null);
+            setResult(null);
         }
     };
 
@@ -297,10 +248,9 @@ export default function EarlyAccessPage() {
                     // Fetch Result
                     const r = await fetch(`${base}/analyze/result/${jobId}`, { signal });
                     if (!r.ok) throw new Error("RESULT_FETCH_FAILED");
-                    const resultData: AnalysisResponse = await r.json();
+                    const resultData: AnalysisResult = await r.json();
 
-                    setChords(resultData.chords);
-                    setMeta(resultData.meta);
+                    setResult(resultData);
                     setProgress(100);
                     setStatus('ready');
 
@@ -409,135 +359,9 @@ export default function EarlyAccessPage() {
         }
     };
 
-    const playPreview = async (chordName: string) => {
-        const trimmed = chordName.trim();
-        if (CHORD_TO_TAB[trimmed]) {
-            await playChordFromTab(CHORD_TO_TAB[trimmed]);
-        }
-    };
 
-    const duckAudio = () => {
-        if (!audioRef.current) return;
-        const originalVol = sourceVolume;
-        // Duck
-        audioRef.current.volume = Math.max(0, originalVol * 0.3);
 
-        // Restore after short delay (e.g. 150ms)
-        setTimeout(() => {
-            if (audioRef.current) {
-                // Check if user changed volume during ducking? 
-                // For MVP, just restore to current state sourceVolume
-                // But we must read the *latest* sourceVolume if possible, or ref?
-                // Actually, accessing state in timeout closure uses captured value.
-                // Ref pattern is safer but maybe overkill. Let's use simple logic:
-                // We will rely on the useEffect below to sync volume, so we just set it back?
-                // Actually, if we just set it back it might be stale.
-                // Better: Trigger a re-apply or just set it. 
-                // Let's rely on a ref for sourceVolume to be safe or just use the volume property.
-            }
-        }, 150);
 
-        // Actually, the useEffect [sourceVolume] will force update. 
-        // We need to bypass the effect or make sure effect doesn't override ducking?
-        // Simpler: The effect sets volume. Ducking sets it temporarily. 
-        // If effect fires during duck (unlikely unless user drags slider), it resets.
-        // We will just restore to 'sourceVolume' (closure capture).
-        // Since playPreview is short, 150ms is fine.
-    };
-
-    // Restore volume after ducking needs to happen carefully. 
-    // Let's use a timeout refs to avoid race conditions?
-    const duckTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-    const triggerDucking = () => {
-        if (!audioRef.current) return;
-
-        if (duckTimeoutRef.current) clearTimeout(duckTimeoutRef.current);
-
-        // Milder ducking: 70% of current volume instead of 20%
-        audioRef.current.volume = sourceVolume * 0.7;
-
-        duckTimeoutRef.current = setTimeout(() => {
-            if (audioRef.current) {
-                audioRef.current.volume = sourceVolume;
-            }
-            duckTimeoutRef.current = null;
-        }, 200); // 200ms duck
-    };
-
-    const handleTimeUpdate = () => {
-        if (audioRef.current) {
-            const time = audioRef.current.currentTime;
-            setCurrentTime(time);
-
-            // Auto Preview Logic
-            if (autoPreview && !audioRef.current.paused && chords.length > 0) {
-                const activeIndex = chords.findIndex(c => time >= c.startSec && time < c.endSec);
-
-                if (activeIndex !== -1 && activeIndex !== prevChordIndexRef.current) {
-                    // New Chord entered
-                    const chord = chords[activeIndex];
-                    playPreview(chord.name);
-                    triggerDucking();
-                    prevChordIndexRef.current = activeIndex;
-                } else if (activeIndex === -1) {
-                    prevChordIndexRef.current = -1;
-                }
-            }
-        }
-    };
-
-    // Volume Effects
-
-    useEffect(() => {
-        if (audioRef.current) {
-            audioRef.current.volume = sourceVolume;
-        }
-    }, [sourceVolume]);
-
-    useEffect(() => {
-        setChordVolume(chordVolume);
-    }, [chordVolume]);
-
-    const formatTime = (sec: number) => {
-        const m = Math.floor(sec / 60);
-        const s = Math.floor(sec % 60);
-        return `${m}:${s.toString().padStart(2, '0')}`;
-    };
-
-    // EDITING LOGIC
-    const startEditing = (index: number) => {
-        setEditingIndex(index);
-        // Focus will be handled by autoFucus on input
-    };
-
-    const saveChord = async (index: number, newName: string) => {
-        // Basic validation
-        const trimmed = newName.trim();
-        if (!trimmed || trimmed.length > 12) {
-            // Revert or alert? For MVP just revert if empty, keep if valid
-            setEditingIndex(null);
-            return;
-        }
-
-        const updated = [...chords];
-        updated[index] = { ...updated[index], name: trimmed };
-        setChords(updated);
-        setEditingIndex(null);
-
-        // Instant Preview
-        // Better fallback: simplistic parsing
-        if (CHORD_TO_TAB[trimmed]) {
-            await playChordFromTab(CHORD_TO_TAB[trimmed]);
-        } else {
-            // Just play a default click or generic chord if unknown, to confirm action
-        }
-
-        // Onboarding Advance
-        if (onboardingStep === "EDIT") {
-            setOnboardingStep("EXPORT");
-        }
-    };
 
     // EXPORT LOGIC
     const downloadFile = (content: string, filename: string, type: string) => {
@@ -559,17 +383,15 @@ export default function EarlyAccessPage() {
             return;
         }
 
+        if (!result) return;
+
         // Onboarding Advance
         if (onboardingStep === "EXPORT") {
             completeOnboarding();
             setOnboardingStep("DONE");
         }
 
-        const data = {
-            meta: meta,
-            chords: chords
-        };
-        downloadFile(JSON.stringify(data, null, 2), `chords-${Date.now()}.json`, 'application/json');
+        downloadFile(JSON.stringify(result, null, 2), `analysis-${Date.now()}.json`, 'application/json');
     };
 
     const handleExportTXT = () => {
@@ -579,13 +401,16 @@ export default function EarlyAccessPage() {
             return;
         }
 
+        if (!result) return;
+
         // Onboarding Advance
         if (onboardingStep === "EXPORT") {
             completeOnboarding();
             setOnboardingStep("DONE");
         }
 
-        const lines = chords.map(c => `${c.startSec.toFixed(3)}\t${c.endSec.toFixed(3)}\t${c.name}`).join('\n');
+        const timeline = analysisResultToTimedChords(result);
+        const lines = timeline.map(c => `${c.startSec.toFixed(3)}\t${c.endSec.toFixed(3)}\t${c.name}`).join('\n');
         downloadFile(lines, `chords-${Date.now()}.txt`, 'text/plain');
     };
 
@@ -718,163 +543,36 @@ export default function EarlyAccessPage() {
                 )}
 
                 {/* RESULTS SECTION */}
-                {status === 'ready' && chords.length > 0 && (
-                    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
+                {status === 'ready' && (
+                    (result?.bars?.length ?? 0) > 0 ? (
+                        <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
+                            <ResultDisplay result={result!} audioUrl={audioUrl} />
 
-                        {/* Audio Player */}
-                        <div className="bg-neutral-900 rounded-xl p-4 border border-neutral-800 sticky top-4 z-50 shadow-2xl backdrop-blur-md bg-neutral-900/90">
-                            <div className="flex items-center space-x-4 mb-2 px-2">
-                                {/* Auto Preview Toggle */}
-                                <label className="flex items-center space-x-2 cursor-pointer group">
-                                    <div className={`w-10 h-6 flex items-center bg-gray-700 rounded-full p-1 duration-300 ease-in-out ${autoPreview ? 'bg-teal-600' : ''}`}>
-                                        <div className={`bg-white w-4 h-4 rounded-full shadow-md transform duration-300 ease-in-out ${autoPreview ? 'translate-x-4' : ''}`} />
-                                    </div>
-                                    <input
-                                        type="checkbox"
-                                        className="hidden"
-                                        checked={autoPreview}
-                                        onChange={(e) => setAutoPreview(e.target.checked)}
-                                    />
-                                    <span className="text-sm text-neutral-300 group-hover:text-white select-none">Auto Chord Preview</span>
-                                </label>
-
-                                <div className="h-4 w-px bg-neutral-700 mx-2"></div>
-
-                                {/* Volume Controls */}
-                                <div className="flex items-center space-x-4">
-                                    <div className="flex items-center space-x-2">
-                                        <span className="text-xs text-neutral-400">Music</span>
-                                        <input
-                                            type="range" min="0" max="1" step="0.05"
-                                            value={sourceVolume}
-                                            onChange={(e) => setSourceVolume(parseFloat(e.target.value))}
-                                            className="w-20 h-1 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
-                                        />
-                                    </div>
-                                    <div className="flex items-center space-x-2">
-                                        <span className="text-xs text-neutral-400">Chords</span>
-                                        <input
-                                            type="range" min="0" max="1" step="0.05"
-                                            value={chordVolume}
-                                            onChange={(e) => setChordVolumeState(parseFloat(e.target.value))}
-                                            className="w-20 h-1 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-
-                            <audio
-                                ref={audioRef}
-                                src={audioUrl!}
-                                controls
-                                className="w-full h-10 invert-[.9] opacity-80"
-                                onTimeUpdate={handleTimeUpdate}
-                            />
-                            <div className="flex justify-between text-xs text-neutral-500 px-2 mt-2 font-mono">
-                                <span>{formatTime(currentTime)}</span>
-                                <div className="flex items-center space-x-2">
-                                    <span>{meta?.bpm ? `${Math.round(meta.bpm)} BPM` : 'Unknown BPM'}</span>
-                                    <span>•</span>
-                                    <span
-                                        translate="no"
-                                        lang="en"
-                                        className="notranslate font-bold text-neutral-400 before:content-[attr(data-text)]"
-                                        data-text={meta?.key || 'Unknown Key'}
-                                    ></span>
-                                </div>
-                                <span>{formatTime(meta?.durationSec || 0)}</span>
+                            {/* Actions Footer */}
+                            <div className="flex justify-end items-center space-x-4 pt-8 border-t border-neutral-800">
+                                {/* STEP 4: EXPORT HINT */}
+                                {onboardingStep === "EXPORT" && (
+                                    <span className="text-sm text-teal-400 animate-pulse">
+                                        この下書きを DAW に持っていけます &rarr;
+                                    </span>
+                                )}
+                                <button
+                                    onClick={handleExportTXT}
+                                    className="px-4 py-2 text-sm text-neutral-400 hover:text-white transition-colors border border-neutral-800 hover:border-neutral-600 rounded-lg">
+                                    Export Text
+                                </button>
+                                <button
+                                    onClick={handleExportJSON}
+                                    className="px-4 py-2 text-sm text-neutral-400 hover:text-white transition-colors border border-neutral-800 hover:border-neutral-600 rounded-lg">
+                                    Export JSON
+                                </button>
                             </div>
                         </div>
-
-                        {/* Chord Timeline (Grid) */}
-                        <div translate="no" className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2 notranslate">
-                            {chords.map((chord, idx) => {
-                                const isActive = currentTime >= chord.startSec && currentTime < chord.endSec;
-                                const isEditing = editingIndex === idx;
-
-                                return (
-                                    <div
-                                        key={`${chord.startSec}-${idx}`}
-                                        className={`
-                         relative p-3 rounded-lg border transition-all duration-200 group
-                         ${isActive
-                                                ? 'bg-teal-500/20 border-teal-500 shadow-[0_0_15px_rgba(20,184,166,0.3)] scale-105 z-10'
-                                                : 'bg-neutral-800/50 border-neutral-800 hover:border-neutral-600 hover:bg-neutral-800'}
-                       `}
-                                        onClick={(e) => {
-                                            // Only seek if not editing
-                                            if (!isEditing && !e.defaultPrevented) {
-                                                if (audioRef.current) {
-                                                    audioRef.current.currentTime = chord.startSec;
-                                                    audioRef.current.play();
-                                                }
-                                            }
-                                        }}
-                                    >
-                                        {/* STEP 3: EDIT TOOLTIP */}
-                                        {onboardingStep === "EDIT" && idx === 0 && (
-                                            <div className="absolute -top-12 left-1/2 -translate-x-1/2 z-50 whitespace-nowrap">
-                                                <div className="bg-teal-500 text-white text-xs font-bold px-2 py-1 rounded shadow-lg animate-bounce">
-                                                    ここをクリックして編集できます
-                                                    <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 border-4 border-transparent border-t-teal-500"></div>
-                                                </div>
-                                            </div>
-                                        )}
-                                        {isEditing ? (
-                                            <input
-                                                autoFocus
-                                                className="bg-transparent text-xl font-bold text-white w-full outline-none border-b border-teal-500"
-                                                defaultValue={chord.name}
-                                                onBlur={(e) => saveChord(idx, e.target.value)}
-                                                onKeyDown={(e) => {
-                                                    if (e.key === 'Enter') {
-                                                        e.currentTarget.blur();
-                                                    }
-                                                }}
-                                                onClick={(e) => e.stopPropagation()}
-                                            />
-                                        ) : (
-                                            <span
-                                                data-text={chord.name}
-                                                className={`notranslate text-xl font-bold block cursor-pointer hover:text-teal-400 before:content-[attr(data-text)] ${isActive ? 'text-teal-300' : 'text-neutral-200'}`}
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    e.preventDefault(); // Prevent Seek
-                                                    startEditing(idx);
-                                                }}
-                                            >
-                                            </span>
-                                        )}
-
-                                        <span className="text-[10px] text-neutral-500 font-mono absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-                                            {formatTime(chord.startSec)}
-                                        </span>
-                                    </div>
-                                );
-                            })}
+                    ) : (
+                        <div className="text-center py-12 text-neutral-400">
+                            解析結果が空でした。別の音源でお試しください。
                         </div>
-
-                        {/* Actions Footer */}
-                        <div className="flex justify-end items-center space-x-4 pt-8 border-t border-neutral-800">
-                            {/* STEP 4: EXPORT HINT */}
-                            {onboardingStep === "EXPORT" && (
-                                <span className="text-sm text-teal-400 animate-pulse">
-                                    この下書きを DAW に持っていけます &rarr;
-                                </span>
-                            )}
-                            <button
-                                onClick={handleExportTXT}
-                                className="px-4 py-2 text-sm text-neutral-400 hover:text-white transition-colors border border-neutral-800 hover:border-neutral-600 rounded-lg">
-                                Export Text
-                            </button>
-                            <button
-                                onClick={handleExportJSON}
-                                className="px-4 py-2 text-sm text-neutral-400 hover:text-white transition-colors border border-neutral-800 hover:border-neutral-600 rounded-lg">
-                                Export JSON
-                            </button>
-                        </div>
-
-                    </div>
+                    )
                 )}
 
                 {/* CTA MODAL */}

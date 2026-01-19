@@ -1,7 +1,7 @@
 import { AnalysisResult } from './api';
 
 export type TimedChord = {
-    chordName: string;
+    name: string;
     startSec: number;
     endSec: number;
     frets: (string)[]; // API returns string[] for frets (e.g. "x", "3")
@@ -32,7 +32,7 @@ export function analysisResultToTimedChords(
         const endSec = startSec + barDurationSec;
 
         timeline.push({
-            chordName: bar.chord,
+            name: bar.chord,
             startSec,
             endSec,
             frets: bar.tab?.frets || [],

@@ -4,7 +4,7 @@ import { setChordVolume } from '../lib/chordAudio';
 import { playChordFromTabWithSoundFont } from '../lib/guitarSound';
 import { useMemo } from 'react';
 import { analysisResultToTimedChords } from '../lib/chordTimeline';
-import { useAutoChordPlayback } from '../hooks/useAutoChordPlayback';
+
 
 interface ResultDisplayProps {
     result: AnalysisResult;
@@ -42,6 +42,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
 
     // Refs for auto-scrolling
     const barRefs = useRef<(HTMLDivElement | null)[]>([]);
+    const lastPlayedBarRef = useRef<number>(-1);
 
     // Format duration (seconds -> mm:ss)
     const formatDuration = (seconds: number) => {
@@ -50,17 +51,49 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
         return `${min}:${sec.toString().padStart(2, '0')}`;
     };
 
-    // Safe bars access
-    const bars = useMemo(() => result?.bars ?? [], [result]);
+    // Safe bars access (renamed to safeBars to ensure no confusion/stale usage)
+    const safeBars = useMemo(() => result?.bars ?? [], [result]);
+
+    // Track actual audio duration for accurate sync
+    const [audioDurationSec, setAudioDurationSec] = useState<number>(0);
+
+    useEffect(() => {
+        const audio = audioRef.current;
+        if (!audio) return;
+
+        const onLoadedMeta = () => {
+            const d = Number(audio.duration);
+            if (Number.isFinite(d) && d > 0) setAudioDurationSec(d);
+        };
+
+        audio.addEventListener("loadedmetadata", onLoadedMeta);
+        // Handle case where metadata is already loaded
+        if (audio.readyState >= 1) {
+            onLoadedMeta();
+        }
+
+        return () => audio.removeEventListener("loadedmetadata", onLoadedMeta);
+    }, [audioUrl]);
 
     // Calculate seconds per bar robustly (Total Duration / Number of Bars)
     // This relies on the backend returning a fixed-grid "bars" array.
     const secondsPerBar = useMemo(() => {
-        const n = bars.length;
-        const dur = result?.duration_sec ?? 0;
-        if (!n || !dur || !Number.isFinite(dur)) return 1;
+        const n = safeBars.length;
+        if (!n) return 1;
+
+        const audioDur = audioDurationSec;
+        const analysisDur = result?.duration_sec ?? 0;
+
+        // Prioritize actual audio duration if available, then analysis duration
+        const dur =
+            Number.isFinite(audioDur) && audioDur > 0
+                ? audioDur
+                : (Number.isFinite(analysisDur) && analysisDur > 0 ? analysisDur : 0);
+
+        if (!dur) return 1;
         return dur / n;
-    }, [bars.length, result?.duration_sec]);
+    }, [safeBars.length, result?.duration_sec, audioDurationSec]);
+
 
     // --- Audio Event Listeners (State Management Only) ---
     useEffect(() => {
@@ -102,37 +135,38 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
         }
 
         const loop = () => {
-            if (audioRef.current) {
-                const currentTime = audioRef.current.currentTime;
-                const effectiveTime = currentTime + offsetSec;
+            try {
+                if (audioRef.current) {
+                    const currentTime = audioRef.current.currentTime;
+                    // Changed to SUBTRACT offset to delay the visual relative to audio
+                    // offsetSec is typically positive latency compensation
+                    const effectiveTime = currentTime - offsetSec;
 
-                // Calculate current bar (0-indexed)
-                let index = -1;
+                    // Calculate current bar (0-indexed)
+                    let index = -1;
 
-                if (effectiveTime > 0) {
-                    index = Math.floor(effectiveTime / secondsPerBar);
+                    if (effectiveTime > 0) {
+                        index = Math.floor(effectiveTime / secondsPerBar);
+                    }
+
+                    // Clamp index to valid range
+                    if (safeBars.length === 0) {
+                        index = -1;
+                    } else if (index >= safeBars.length) {
+                        index = safeBars.length - 1;
+                    }
+
+                    if (index < 0) {
+                        index = -1;
+                    }
+
+                    setCurrentBarIndex(prev => {
+                        if (prev !== index) return index;
+                        return prev;
+                    });
                 }
-
-                // Clamp index to valid range
-                // Note: allowing index to go beyond bars.length is handled by just not highlighting anything, 
-                // but usually we want to clamp it for safety if we are looking up arrays.
-                // However, if the song is longer than analysis, we might want to just show nothing.
-                // For now, let's clamp strict to bars range or -1 if invalid.
-
-                if (bars.length === 0) {
-                    index = -1;
-                } else if (index >= bars.length) {
-                    index = bars.length - 1;
-                }
-
-                if (index < 0) {
-                    index = -1;
-                }
-
-                setCurrentBarIndex(prev => {
-                    if (prev !== index) return index;
-                    return prev;
-                });
+            } catch (e) {
+                console.error("ResultDisplay RAF loop error:", e);
             }
             rafIdRef.current = requestAnimationFrame(loop);
         };
@@ -145,7 +179,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                 rafIdRef.current = null;
             }
         };
-    }, [isPlaying, result, offsetSec, secondsPerBar, bars]);
+    }, [isPlaying, result, offsetSec, secondsPerBar, safeBars]);
 
     // Auto-scroll effect
     useEffect(() => {
@@ -180,18 +214,37 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
         }
     }, [isPlaying, autoScroll]);
 
-    // Auto Chord Playback
-    const chordTimeline = useMemo(() => {
-        try {
-            // result.bars を必ず bars(=配列)で上書きして渡す
-            return analysisResultToTimedChords({ ...result, bars });
-        } catch (e) {
-            console.error("analysisResultToTimedChords failed:", e);
-            return [];
-        }
-    }, [result, bars]);
+    // Auto Chord Playback (Synchronized with visual grid)
+    useEffect(() => {
+        if (!autoChord) return;
 
-    useAutoChordPlayback(audioRef.current, chordTimeline ?? [], autoChord, offsetSec);
+        if (currentBarIndex < 0) return;
+
+        // Debounce/Check if playing?
+        // If we want it strictly during playback:
+        if (!isPlaying) return;
+
+        // Prevent re-triggering the same bar repeatedly
+        if (lastPlayedBarRef.current === currentBarIndex) return;
+        lastPlayedBarRef.current = currentBarIndex;
+
+        const bar = safeBars[currentBarIndex];
+        const frets = bar?.tab?.frets;
+        if (!frets) return;
+
+        // Sustain control: Play for the duration of the bar (sustainSec)
+        const sustainSec = Math.min(
+            1.8,                         // Upper limit (prevent too long sustain)
+            Math.max(0.25, secondsPerBar * 0.95) // Lower limit (prevent staccato), 0.95 for legato
+        );
+
+        playChordFromTabWithSoundFont(frets, {
+            durationSec: sustainSec,
+            gain: chordVolume
+        }).catch((e) => {
+            console.error("Failed to play chord", e);
+        });
+    }, [autoChord, isPlaying, currentBarIndex, safeBars, secondsPerBar, chordVolume]);
 
     // Initialize Volume
     useMemo(() => {
@@ -199,7 +252,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
     }, []);
 
     const handleBarClick = (barIndex: number) => {
-        const bar = bars[barIndex];
+        const bar = safeBars[barIndex];
         if (!bar) return;
         const frets = bar.tab?.frets;
 
@@ -207,7 +260,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
 
         // Play chord sound
         if (frets) {
-            playChordFromTabWithSoundFont(frets).catch((e) => {
+            playChordFromTabWithSoundFont(frets, { gain: chordVolume }).catch((e) => {
                 console.error("Failed to play chord", e);
             });
         }
@@ -330,7 +383,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                 <div className="w-px h-12 bg-gray-100"></div>
                 <div className="text-center">
                     <div className="text-xs text-gray-400 uppercase tracking-wider font-semibold mb-1">Bars</div>
-                    <div className="text-3xl font-black text-gray-800">{bars.length}</div>
+                    <div className="text-3xl font-black text-gray-800">{safeBars.length}</div>
                 </div>
             </div>
 
@@ -338,7 +391,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
             <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
                 <h3 className="text-sm font-bold text-gray-400 uppercase mb-4 tracking-wider">Chord Progression</h3>
                 <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-2">
-                    {bars.map((bar, index) => (
+                    {safeBars.map((bar, index) => (
                         <div
                             key={`${index}-${bar.bar}-${bar.chord}`}
                             onClick={() => handleBarClick(index)}
@@ -358,7 +411,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
             <div>
                 <h3 className="text-sm font-bold text-gray-400 uppercase mb-4 tracking-wider">Guitar TABs</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {bars.map((bar, index) => (
+                    {safeBars.map((bar, index) => (
                         <div
                             key={`${index}-${bar.bar}-${bar.chord}`}
                             ref={el => { barRefs.current[index] = el; }}
@@ -429,7 +482,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                         <span>{audioRef.current?.currentTime.toFixed(3)}s</span>
 
                         <span className="text-gray-400">Effective:</span>
-                        <span className="text-green-400">{(audioRef.current ? audioRef.current.currentTime + offsetSec : 0).toFixed(3)}s</span>
+                        <span className="text-green-400">{(audioRef.current ? audioRef.current.currentTime - offsetSec : 0).toFixed(3)}s</span>
 
                         <span className="text-gray-400">Bar Idx:</span>
                         <span className="text-blue-400">{currentBarIndex}</span>
@@ -439,6 +492,11 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
 
                         <span className="text-gray-400">Offset:</span>
                         <span className="text-yellow-400">{offsetSec.toFixed(2)}s</span>
+
+                        <span className="text-gray-400">AudioDur:</span>
+                        <span>{audioDurationSec.toFixed(3)}s</span>
+                        <span className="text-gray-400">AnalysisDur:</span>
+                        <span>{(result?.duration_sec ?? 0).toFixed(3)}s</span>
                     </div>
                 </div>
             )}

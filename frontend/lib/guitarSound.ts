@@ -70,14 +70,19 @@ export function fretsToMidiNotes(
     return notes;
 }
 
+export type PlayChordOptions = {
+    durationSec?: number;
+    gain?: number;
+};
+
 /**
  * Play a chord from TAB frets using SoundFont.
  * @param frets e.g. [3,2,0,0,0,3] / ["3","2","0","0","0","3"]
- * @param durationSec Duration in seconds
+ * @param options Options for playback (duration, etc.)
  */
 export async function playChordFromTabWithSoundFont(
     frets: Array<number | string | null | undefined>,
-    durationSec: number = 2.0
+    options?: PlayChordOptions
 ): Promise<void> {
     const guitar = await getGuitar();
     if (!guitar || !audioContext) return;
@@ -95,12 +100,16 @@ export async function playChordFromTabWithSoundFont(
     }
 
     const now = audioContext.currentTime;
+    const duration = options?.durationSec ?? 2.0;
+    const gain = options?.gain ?? 1.0;
 
     midiNotes.forEach((midi, idx) => {
         // Slight stagger for a realistic "strum" effect (20ms per string)
         const stagger = idx * 0.02;
+        // soundfont-player handles 'duration' by scheduling noteOff
         guitar.play(midi, now + stagger, {
-            duration: durationSec,
+            duration: duration,
+            gain: gain,
         });
     });
 }
