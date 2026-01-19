@@ -184,6 +184,11 @@ export default function DemoPage() {
       </div>
 
       <div className="max-w-2xl mx-auto p-4 space-y-12">
+        {/* [Dev Preview Catchphrase] */}
+        <div className="text-center font-bold text-blue-600 bg-blue-50 border border-blue-100 rounded-lg p-3">
+          開発中のギター曲コード解析ロジックを、そのまま公開しています。
+        </div>
+
         {/* [First View] */}
         <div className="text-center space-y-4 py-8">
           <h2 className="text-2xl font-bold text-gray-900 leading-snug">
@@ -197,45 +202,59 @@ export default function DemoPage() {
 
         {/* URL Input */}
         {!activeSong && (
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-            <form onSubmit={handleUrlSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">YouTube URL</label>
-                <input
-                  type="text"
-                  className="w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 p-2 border"
-                  placeholder="https://youtube.com/watch?v=..."
-                  value={inputUrl}
-                  onChange={e => setInputUrl(e.target.value)}
-                />
-                <p className="mt-2 text-sm text-gray-600">
-                  ※ このデモで入力できるURLは以下の1つのみです<br />
-                  <span className="font-mono select-all block mt-1 break-all bg-gray-50 p-2 rounded border border-gray-200">
-                    https://www.youtube.com/watch?v=JegJ6cSsUgg
-                  </span>
-                </p>
+          <div className="space-y-6">
+            {/* [Warning Block] */}
+            <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4">
+              <div className="flex">
+                <div className="ml-3">
+                  <p className="text-sm text-yellow-700 whitespace-pre-wrap">
+                    ※ このデモは現在開発中のコード解析ロジックを確認するためのプレビューです。<br />
+                    編集・音再生・保存などは今後のアップデートで提供予定です。
+                  </p>
+                </div>
               </div>
-              <button
-                type="submit"
-                className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700"
-              >
-                Load Demo
-              </button>
-            </form>
+            </div>
 
-            {error && (
-              <div className="mt-4 p-4 bg-red-50 text-red-700 rounded-md text-sm border border-red-100">
-                <p className="font-bold mb-2">{error}</p>
-                {error.includes("specific songs") && (
-                  <button
-                    onClick={copySupportedUrl}
-                    className="text-blue-600 underline hover:text-blue-800"
-                  >
-                    Copy supported URL for testing
-                  </button>
-                )}
-              </div>
-            )}
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+              <form onSubmit={handleUrlSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">YouTube URL</label>
+                  <input
+                    type="text"
+                    className="w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 p-2 border"
+                    placeholder="https://youtube.com/watch?v=..."
+                    value={inputUrl}
+                    onChange={e => setInputUrl(e.target.value)}
+                  />
+                  <p className="mt-2 text-sm text-gray-600">
+                    ※ このデモで入力できるURLは以下の1つのみです<br />
+                    <span className="font-mono select-all block mt-1 break-all bg-gray-50 p-2 rounded border border-gray-200">
+                      https://www.youtube.com/watch?v=JegJ6cSsUgg
+                    </span>
+                  </p>
+                </div>
+                <button
+                  type="submit"
+                  className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700"
+                >
+                  Load Demo
+                </button>
+              </form>
+
+              {error && (
+                <div className="mt-4 p-4 bg-red-50 text-red-700 rounded-md text-sm border border-red-100">
+                  <p className="font-bold mb-2">{error}</p>
+                  {error.includes("specific songs") && (
+                    <button
+                      onClick={copySupportedUrl}
+                      className="text-blue-600 underline hover:text-blue-800"
+                    >
+                      Copy supported URL for testing
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -282,7 +301,7 @@ export default function DemoPage() {
                         translate="no"
                         className={`notranslate text-xl font-bold ${isActive ? 'scale-110 origin-left' : ''}`}
                       >
-                        {item.chordName}
+                        {item.name}
                       </span>
                     </div>
                     <div translate="no" className="notranslate flex gap-1 font-mono text-xs">
@@ -358,26 +377,25 @@ export default function DemoPage() {
           </div>
         </div>
 
-        {/* [CTA] */}
-        <div className="bg-blue-50 p-8 rounded-2xl text-center space-y-6">
-          <a
-            href="/early-access?from=demo"
-            className="inline-block bg-blue-600 text-white font-bold py-3 px-8 rounded-full shadow-lg hover:bg-blue-700 transition-transform active:scale-95"
+        {/* [Future Version Notice] */}
+        <div className="bg-gray-50 p-8 rounded-2xl text-center space-y-6 border border-gray-200">
+          <button
+            disabled
+            className="inline-block bg-gray-400 text-white font-bold py-3 px-8 rounded-full shadow-none cursor-not-allowed opacity-70"
           >
-            自分の曲で試す（Early Access）
-          </a>
-          <div className="inline-block text-left mx-auto">
-            <ul className="text-sm text-gray-600 space-y-1">
-              <li>・2曲まで無料で体験できます</li>
-              <li>・解析精度や編集感を確認できます</li>
-              <li>・気に入ったら制限を解除できます</li>
-            </ul>
+            拡張版（開発中）
+          </button>
+          <div className="text-sm font-bold text-red-600">
+            ※ 近日公開予定
           </div>
         </div>
       </div>
 
       {/* Footer */}
-      <div className="text-center pt-8 pb-4">
+      <div className="text-center pt-8 pb-4 space-y-4">
+        <p className="text-sm text-gray-500">
+          今後、編集・音の再生・保存などを含む拡張版を検討しています。
+        </p>
         <a href="/legal" className="text-xs text-gray-400 hover:text-gray-600 underline">
           特定商取引法に基づく表記
         </a>
