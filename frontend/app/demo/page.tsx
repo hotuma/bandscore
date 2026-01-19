@@ -330,51 +330,14 @@ export default function DemoPage() {
           </ul>
         </div>
 
-        {/* [Value & Future] -> [Next Step Funnel] */}
-        <div className="text-center space-y-4 py-8">
-          <h2 className="text-2xl font-bold text-gray-900 leading-snug">
-            🚀 次は、あなたの曲で試してみませんか？
-          </h2>
-          <p className="text-lg font-medium text-gray-800">
-            この demo で見た体験を、実際の音源で確かめられます。
-          </p>
-          <div className="text-gray-600 leading-relaxed space-y-2">
-            <p>
-              BandScore は「耳コピ作業 → 練習開始」までの時間を、<br className="hidden sm:inline" />
-              できるだけ短くするためのツールです。
-            </p>
-            <p>
-              この demo は “完成イメージ” ですが、<br className="hidden sm:inline" />
-              Early Access では、あなたの音源を使って実際に試せます。
-            </p>
-          </div>
-        </div>
-
-        {/* [Official Version Objectives] -> [Feature Cards] */}
-        <div className="bg-gradient-to-br from-blue-50 to-white border-2 border-blue-100 rounded-2xl p-6 sm:p-8 shadow-sm space-y-6">
-          <div className="grid sm:grid-cols-2 gap-4">
-            <div className="flex items-center gap-3 bg-white p-4 rounded-xl border border-blue-100 shadow-sm text-gray-700 font-medium text-sm">
-              <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-xs font-bold">✅</span>
-              音源をアップロードしてコードを自動生成
-            </div>
-            <div className="flex items-center gap-3 bg-white p-4 rounded-xl border border-blue-100 shadow-sm text-gray-700 font-medium text-sm">
-              <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-xs font-bold">✅</span>
-              曲に合わせてコード音を再生（練習用）
-            </div>
-            <div className="flex items-center gap-3 bg-white p-4 rounded-xl border border-blue-100 shadow-sm text-gray-700 font-medium text-sm">
-              <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-xs font-bold">✅</span>
-              生成されたコードの修正・整形
-            </div>
-            <div className="flex items-center gap-3 bg-white p-4 rounded-xl border border-blue-100 shadow-sm text-gray-700 font-medium text-sm">
-              <span className="flex-shrink-0 w-6 h-6 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center text-xs font-bold">⏳</span>
-              PDF / MIDI 出力（Early Access で解放）
-            </div>
-          </div>
-
-          <div className="text-xs text-gray-500 bg-white/50 p-4 rounded-lg border border-gray-100 leading-relaxed space-y-1">
-            <p>※ この demo では音源のアップロードはできません。</p>
-            <p>※ Early Access では、2曲まで実際の音源で体験できます。</p>
-          </div>
+        {/* [Demo Scope Description] */}
+        <div className="bg-gray-50 p-6 rounded-xl space-y-3 border border-gray-200">
+          <h3 className="font-bold text-gray-800">このデモで確認できること</h3>
+          <ul className="list-disc list-inside text-sm text-gray-600 space-y-1">
+            <li>再生に同期してコード進行がどのように表示されるか</li>
+            <li>コードが時間軸に沿って切り替わる挙動</li>
+            <li>解析ロジックの方向性（完成度ではありません）</li>
+          </ul>
         </div>
 
         {/* [Future Version Notice] */}
