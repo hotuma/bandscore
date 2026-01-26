@@ -283,6 +283,18 @@ def cosine_similarity_matrix(templates: np.ndarray, chroma: np.ndarray) -> np.nd
     chrom_norm = chroma / (np.linalg.norm(chroma, axis=0, keepdims=True) + 1e-8)
     return temp_norm @ chrom_norm
 
+def _l2_normalize(x: np.ndarray, eps: float = 1e-9) -> np.ndarray:
+    n = np.linalg.norm(x)
+    if n < eps:
+        return x * 0.0
+    return x / n
+
+def _cosine_similarity(a: np.ndarray, b: np.ndarray, eps: float = 1e-9) -> float:
+    a = _l2_normalize(a, eps)
+    b = _l2_normalize(b, eps)
+    denom = (np.linalg.norm(a) * np.linalg.norm(b)) + eps
+    return float(np.dot(a, b) / denom)
+
 def detect_chords_matrix(
     main_matrix: np.ndarray,   # (S, 12)
     bass_matrix: np.ndarray,   # (S, 12)
@@ -290,9 +302,18 @@ def detect_chords_matrix(
     penalty_value: float = 0.15,
     main_weight: float = 0.7,
     bass_weight: float = 0.3,
+    # Stagnation prevention params (User "Golden Master")
+    flux_threshold: float = 0.15,         
+    high_flux_threshold: float = 0.35,
+    max_repeat_segments: int = 6,         # Lowered to 6 (approx 6s) for stricter UX
+    min_hold_segments: int = 2,           
+    same_chord_penalty: float = 0.20,
+    long_stag_penalty: float = 0.60,
+    topk: int = 3,
 ) -> list[str]:
     """
-    Detect chords using weighted combination of main and bass chroma.
+    Detect chords using weighted combination of main and bass chroma,
+    with Stagnation Prevention logic to avoid "sticky" chords.
     """
     num_segments = main_matrix.shape[0]
     if num_segments == 0:
@@ -305,7 +326,8 @@ def detect_chords_matrix(
         bass_matrix = bass_matrix[:min_segs, :]
         num_segments = min_segs
 
-    # Main scores
+    # 1. Calculate Raw Scores (C, S)
+    # ---------------------------------------------------------
     main_scores = cosine_similarity_matrix(TEMPLATE_MATRIX, main_matrix.T)  # (C, S)
 
     num_chords = TEMPLATE_MATRIX.shape[0]
@@ -320,11 +342,112 @@ def detect_chords_matrix(
 
     final_scores = main_scores * main_weight + bass_scores * bass_weight
 
+    # Diatonic/Mode Penalty (Global)
     if penalty_mask is not None and penalty_mask.shape[0] == num_chords:
         final_scores[penalty_mask, :] -= penalty_value
 
-    best_indices = np.argmax(final_scores, axis=0)
-    return [CHORD_LABELS[i] for i in best_indices]
+    # 2. Stagnation Prevention (Iterative Decoding)
+    # ---------------------------------------------------------
+    # Mapping to user's variable names for clarity
+    chroma = main_matrix      # (n_segments, 12)
+    scores = final_scores.T   # (n_segments, n_chords)
+    chord_labels = CHORD_LABELS
+    
+    # Precompute flux (delta)
+    delta = np.zeros(num_segments, dtype=np.float32)
+    for i in range(1, num_segments):
+        cs = _cosine_similarity(chroma[i], chroma[i-1])
+        delta[i] = 1.0 - cs  # cosine distance-ish
+
+    out_idx = np.zeros(num_segments, dtype=np.int32)
+    
+    # Initialize with first segment argmax
+    last = int(np.argmax(scores[0]))
+    out_idx[0] = last
+    run_length = 1
+
+    for i in range(1, num_segments):
+        row = scores[i].astype(np.float32, copy=True)
+        
+        # Get top-k candidates (indices)
+        # Using argpartition for speed, identifying top K best scores
+        k = min(topk, num_chords)
+        # Note: argpartition puts the k-th element in sorted position, others undefined order
+        # We want indices of the largest k elements.
+        topk_unsorted = np.argpartition(row, -k)[-k:]
+        # Sort these top k indices by score descending
+        topk_idx = topk_unsorted[np.argsort(-row[topk_unsorted])]
+        
+        best = int(topk_idx[0])
+
+        # ---- Rule C: Min hold (guard against flicker)
+        # If we just switched recently, and flux isn't high, prefer stability.
+        if run_length < min_hold_segments and delta[i] < high_flux_threshold:
+            out_idx[i] = last
+            run_length += 1
+            # Skip other rules
+            continue
+
+        # ---- Rule B: Long stagnation (UX protection) - strongest intervention
+        # If we have suppressed the same chord for too long, try to force a switch.
+        if run_length >= max_repeat_segments:
+            # Case 1: High Flux -> Strong Penalty (Existing logic)
+            # The audio is changing, but the chord stayed same -> likely wrong.
+            if delta[i] >= flux_threshold:
+                # Strongly penalize last chord to encourage switching
+                row[last] = row[last] - long_stag_penalty
+                # Recompute best after penalty
+                best2 = int(np.argmax(row))
+                chosen = best2 if best2 != last else best2  # if still last, accept
+            
+            # Case 2: Low Flux but Weak Confidence (New logic)
+            # The audio isn't changing much (low flux), but we've been here too long.
+            # If the current best chord is "barely" winning, it might be an error.
+            # If the gap to 2nd place is small, force a switch to break monotony.
+            else:
+                 if len(topk_idx) >= 2:
+                     cand2 = int(topk_idx[1])
+                     # Check gap in ORIGINAL scores (best is top1)
+                     gap = scores[i, best] - scores[i, cand2]
+                     
+                     # If ambiguous, force switch to 2nd best to avoid infinite stagnation
+                     if gap <= 0.10:
+                         chosen = cand2
+                     else:
+                         chosen = best
+                 else:
+                     chosen = best
+
+        else:
+            chosen = best
+
+            # ---- Rule A: High flux stagnation
+            # Normal check: if flux is high but we picked the same chord, penalize it slightly.
+            if (delta[i] >= flux_threshold) and (best == last):
+                # Apply modest penalty to "same as last" and reselect
+                row[last] = row[last] - same_chord_penalty
+                best2 = int(np.argmax(row))
+
+                if best2 != last:
+                    chosen = best2
+                else:
+                    # Still stuck: fall back to 2nd candidate if available
+                    if len(topk_idx) >= 2:
+                        cand2 = int(topk_idx[1])
+                        # Only switch if the gap is not huge (avoid random jumps)
+                        if (scores[i, best] - scores[i, cand2]) <= 0.10:
+                            chosen = cand2
+
+        out_idx[i] = chosen
+
+        # Update run length
+        if chosen == last:
+            run_length += 1
+        else:
+            last = chosen
+            run_length = 1
+
+    return [chord_labels[j] for j in out_idx]
 
 def aggregate_chroma_per_segment(
     chroma: np.ndarray,
