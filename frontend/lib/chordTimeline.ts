@@ -24,6 +24,8 @@ export function analysisResultToTimedChords(
 
     const timeline: TimedChord[] = [];
 
+    if (!bars) return [];
+
     bars.forEach((bar, index) => {
         // In the current API, every bar has a chord, but we check just in case
         if (!bar.chord) return;

@@ -8,13 +8,20 @@ export interface Bar {
     tab: Tab;
 }
 
+export type AnalyzeMode = 'PREVIEW' | 'EARLY_ACCESS' | 'FULL';
+
 export interface AnalysisResult {
     bpm: number;
     duration_sec: number;
     time_signature: string;
     key: string;
-    bars: Bar[];
+    bars: Bar[] | null; // Nullable for Preview
     audio_url?: string;
+    // New fields
+    mode?: AnalyzeMode;
+    is_preview?: boolean;
+    analyzed_duration_sec?: number;
+    export_allowed?: boolean;
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
@@ -50,11 +57,21 @@ function normalizeAnalysisResult(data: any): AnalysisResult {
     return data as AnalysisResult;
 }
 
-export async function analyzeAudio(file: File): Promise<AnalysisResult> {
+export async function analyzeAudio(file: File, mode: AnalyzeMode = 'EARLY_ACCESS'): Promise<AnalysisResult> {
     const formData = new FormData();
     formData.append('file', file);
 
-    const response = await fetchWithTimeout(`${API_URL}/analyze`, {
+    let url = `${API_URL}/analyze`;
+
+    // Strict Routing
+    if (mode === 'PREVIEW') {
+        url = `${API_URL}/analyze/preview`;
+        // Do NOT append mode for preview endpoint (server enforces it)
+    } else {
+        formData.append('mode', mode);
+    }
+
+    const response = await fetchWithTimeout(url, {
         method: 'POST',
         body: formData,
         timeout: 180000, // 3 minutes
@@ -69,14 +86,22 @@ export async function analyzeAudio(file: File): Promise<AnalysisResult> {
     return normalizeAnalysisResult(data);
 }
 
-export async function analyzeYoutube(url: string, cookiesFile?: File): Promise<AnalysisResult> {
+export async function analyzeYoutube(url: string, cookiesFile?: File, mode: AnalyzeMode = 'EARLY_ACCESS'): Promise<AnalysisResult> {
     const formData = new FormData();
     formData.append("url", url);
     if (cookiesFile) {
         formData.append("cookies", cookiesFile);
     }
 
-    const response = await fetchWithTimeout(`${API_URL}/analyze/url`, {
+    let endpoint = `${API_URL}/analyze/url`;
+    if (mode === 'PREVIEW') {
+        endpoint = `${API_URL}/analyze/url/preview`;
+        // Do NOT append mode
+    } else {
+        formData.append("mode", mode);
+    }
+
+    const response = await fetchWithTimeout(endpoint, {
         method: 'POST',
         // Note: Do NOT set Content-Type header here, let browser set it with boundary for FormData
         body: formData,

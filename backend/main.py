@@ -21,6 +21,7 @@ import threading
 from scipy.signal import butter, sosfilt
 from collections import Counter
 from typing import Dict, Any, Optional
+from enum import Enum
 
 app = FastAPI()
 
@@ -77,8 +78,12 @@ def cleanup_jobs():
     for jid in expired:
         jobs.pop(jid, None)
 
-# --- Helpers & Data ---
+# --- Types ---
 
+class AnalyzeMode(str, Enum):
+    PREVIEW = "PREVIEW"
+    EARLY_ACCESS = "EARLY_ACCESS"
+    FULL = "FULL"
 
 ChordTab = dict[str, list[str]]
 
@@ -815,13 +820,14 @@ def startup_event():
     except:
         pass
 
-def run_analysis_bg(job_id: str, file_path: str):
+def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode.PREVIEW):
     cleanup_jobs()
     
-    # Init progress
+    # Init progress (Store mode in job)
     jobs[job_id] = {
         **jobs.get(job_id, {}),
         "status": "analyzing",
+        "mode": mode,
         # Use 0.01 (1%) as "Started" signal. 0.0 might be confused with "not started"
         "progress": 0.01, 
         "updated_at": time.time(),
@@ -844,7 +850,22 @@ def run_analysis_bg(job_id: str, file_path: str):
     update_progress(2.0)
 
     try:
-        MAX_ANALYSIS_SEC = float(os.getenv("MAX_ANALYSIS_SEC", "120"))
+        # --- Mode Enforcement ---
+        # 1. Preview Hardcap
+        if mode == AnalyzeMode.PREVIEW:
+             # Force 60s hardcap (ignore environment or input)
+             MAX_ANALYSIS_SEC = 60.0
+             print("[INFO] Mode: PREVIEW -> Forced duration 60.0s")
+        else:
+             # Normal logic
+             MAX_ANALYSIS_SEC = float(os.getenv("MAX_ANALYSIS_SEC", "120"))
+
+        # 2. Usage Check (Early Access)
+        if mode == AnalyzeMode.EARLY_ACCESS:
+            # TODO: song-hash based deduplication
+            # Current: Simple 2-use limit placeholder (Logic would go here or at endpoint level)
+            pass
+            
         CHUNK_SEC = float(os.getenv("CHUNK_SEC", "30"))
 
         # 3) Remove initial get_duration to avoid "decode stall"
@@ -936,7 +957,12 @@ def run_analysis_bg(job_id: str, file_path: str):
             "duration_sec": round(offset, 1),
             "time_signature": "2/4",
             "key": key,
-            "bars": all_bars
+            # Strict Return Schema based on Mode
+            "mode": mode,
+            "is_preview": (mode == AnalyzeMode.PREVIEW),
+            "analyzed_duration_sec": round(offset, 1),
+            "export_allowed": (mode == AnalyzeMode.EARLY_ACCESS or mode == AnalyzeMode.FULL),
+            "bars": None if mode == AnalyzeMode.PREVIEW else all_bars
         }
 
         jobs[job_id] = {
@@ -965,8 +991,35 @@ def run_analysis_bg(job_id: str, file_path: str):
         except Exception:
             pass
 
+
+
 @app.post("/analyze")
-async def analyze(file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
+async def analyze(
+    mode: Optional[AnalyzeMode] = Form(None), # Require explicit mode in future, allow None for fallback now
+    file: UploadFile = File(...), 
+    background_tasks: BackgroundTasks = None
+):
+    # Transition Logic: Fallback to EARLY_ACCESS if missing
+    if mode is None:
+        print("[WARN] Missing mode in /analyze request. Fallback to EARLY_ACCESS.")
+        mode = AnalyzeMode.EARLY_ACCESS
+
+    # Negative Check: Full without Payment (Mock for now)
+    # in real world, we check user session/subscription here.
+    # if mode == AnalyzeMode.FULL and not is_paid_user(): raise 403
+    
+    return await _process_analyze(file, mode)
+
+@app.post("/analyze/preview")
+async def analyze_preview(
+    file: UploadFile = File(...), 
+    background_tasks: BackgroundTasks = None
+):
+    # Force PREVIEW mode, ignore client input
+    return await _process_analyze(file, AnalyzeMode.PREVIEW)
+
+# Shared Logic
+async def _process_analyze(file: UploadFile, mode: AnalyzeMode):
     # 1. Validate File Size
     file.file.seek(0, os.SEEK_END)
     size = file.file.tell()
@@ -1006,7 +1059,7 @@ async def analyze(file: UploadFile = File(...), background_tasks: BackgroundTask
 
     # Use Thread instead of BackgroundTasks for better survival on Render free tier
     # (BackgroundTasks are tied to request lifecycle, Thread is slightly more detached)
-    threading.Thread(target=run_analysis_bg, args=(job_id, file_path)).start()
+    threading.Thread(target=run_analysis_bg, args=(job_id, file_path, mode)).start()
 
     return JSONResponse(status_code=202, content={"job_id": job_id})
 
@@ -1037,9 +1090,25 @@ def analyze_result(job_id: str):
 @app.post("/analyze/url")
 async def analyze_url(
     url: str = Form(...),
+    mode: Optional[AnalyzeMode] = Form(None),
     cookies: UploadFile | None = File(None),
     background_tasks: BackgroundTasks = None
 ):
+    if mode is None:
+         print("[WARN] Missing mode in /analyze/url request. Fallback to EARLY_ACCESS.")
+         mode = AnalyzeMode.EARLY_ACCESS
+    
+    return await _process_analyze_url(url, mode, cookies)
+
+@app.post("/analyze/url/preview")
+async def analyze_url_preview(
+    url: str = Form(...),
+    cookies: UploadFile | None = File(None),
+    background_tasks: BackgroundTasks = None
+):
+    return await _process_analyze_url(url, AnalyzeMode.PREVIEW, cookies)
+
+async def _process_analyze_url(url: str, mode: AnalyzeMode, cookies: UploadFile | None):
     cleanup_jobs()
     
     cookie_path = None
@@ -1083,7 +1152,7 @@ async def analyze_url(
         }
         
         # Threading for URL analysis too
-        threading.Thread(target=run_analysis_bg, args=(job_id, file_path)).start()
+        threading.Thread(target=run_analysis_bg, args=(job_id, file_path, mode)).start()
         
         return JSONResponse(status_code=202, content={"job_id": job_id})
 

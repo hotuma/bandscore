@@ -315,6 +315,7 @@ export default function EarlyAccessPage() {
 
         const formData = new FormData();
         formData.append('file', file);
+        formData.append('mode', 'EARLY_ACCESS');
 
         try {
             // Connect to Backend
