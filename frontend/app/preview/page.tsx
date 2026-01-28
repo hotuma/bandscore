@@ -21,6 +21,8 @@ export default function PreviewPage() {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const abortPollingRef = useRef<AbortController | null>(null);
     const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
+    const previewChords = result?.bars?.slice(0, 16) ?? [];
+    const hasMoreChords = (result?.bars?.length ?? 0) > previewChords.length;
 
     const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
@@ -242,19 +244,30 @@ export default function PreviewPage() {
                                 <p className="text-xs text-neutral-400 uppercase tracking-wider mb-1">BPM</p>
                                 <p className="text-2xl font-mono text-white">{result.bpm}</p>
                             </div>
-                            <div className="bg-neutral-800 p-4 rounded-lg opacity-50">
+                            <div className="bg-neutral-800 p-4 rounded-lg">
                                 <p className="text-xs text-neutral-400 uppercase tracking-wider mb-1">Key</p>
-                                <div className="flex items-center gap-2">
-                                    <span className="text-xl font-mono text-white">Hidden</span>
-                                    <span className="text-xs bg-neutral-700 px-2 py-0.5 rounded text-neutral-300">Preview</span>
-                                </div>
+                                <p className="text-2xl font-mono text-white">{result.key || 'Unknown'}</p>
                             </div>
-                            <div className="bg-neutral-800 p-4 rounded-lg opacity-50">
+                            <div className="bg-neutral-800 p-4 rounded-lg">
                                 <p className="text-xs text-neutral-400 uppercase tracking-wider mb-1">Chords</p>
-                                <div className="flex items-center gap-2">
-                                    <span className="text-xl font-mono text-white">Hidden</span>
-                                    <span className="text-xs bg-neutral-700 px-2 py-0.5 rounded text-neutral-300">Preview</span>
-                                </div>
+                                {previewChords.length ? (
+                                    <>
+                                        <div className="flex flex-wrap gap-2">
+                                            {previewChords.map((bar) => (
+                                                <span key={bar.bar} className="rounded bg-neutral-700 px-2 py-1 text-sm font-mono text-white">
+                                                    {bar.chord}
+                                                </span>
+                                            ))}
+                                        </div>
+                                        {hasMoreChords && (
+                                            <p className="text-xs text-neutral-500 mt-2">
+                                                Showing first {previewChords.length} bars.
+                                            </p>
+                                        )}
+                                    </>
+                                ) : (
+                                    <p className="text-sm text-neutral-400">No chords detected in preview range.</p>
+                                )}
                             </div>
                         </div>
 

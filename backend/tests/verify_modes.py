@@ -61,7 +61,8 @@ def test_preview_mode():
         print("Bars:", result.get("bars"))
         
         assert result.get("mode") == "PREVIEW"
-        assert result.get("bars") is None
+        assert result.get("bars") is not None
+        assert isinstance(result.get("bars"), list)
         assert result.get("is_preview") is True
         print("PASS: Preview Mode enforced correctly.")
 
