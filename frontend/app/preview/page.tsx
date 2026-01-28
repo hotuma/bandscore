@@ -12,6 +12,9 @@ type ErrorState = {
 };
 
 export default function PreviewPage() {
+    useEffect(() => {
+        console.log("PREVIEW PAGE LOADED - NEW VERSION", { updated: new Date().toISOString() });
+    }, []);
     const router = useRouter();
     const [file, setFile] = useState<File | null>(null);
     const [result, setResult] = useState<AnalysisResult | null>(null);
@@ -54,6 +57,7 @@ export default function PreviewPage() {
                 const data = await s.json();
                 const jobStatus = data.status;
                 const p = typeof data.progress === "number" ? data.progress : 0;
+                console.log("[poll] status", { jobId, jobStatus, p });
 
                 setProgress(p);
 
@@ -71,8 +75,10 @@ export default function PreviewPage() {
 
                 if (jobStatus === "done") {
                     const r = await fetch(`${base}/analyze/result/${jobId}`, { signal });
+                    console.log("[poll] result fetch", { ok: r.ok, status: r.status });
                     if (!r.ok) throw new Error("RESULT_FETCH_FAILED");
                     const resultData: AnalysisResult = await r.json();
+                    console.log("ANALYZE RESULT", resultData);
                     setResult(resultData);
                     setStatus('ready');
                     return;
@@ -172,7 +178,15 @@ export default function PreviewPage() {
                                     </div>
                                 </div>
                                 <button
-                                    onClick={(e) => { e.stopPropagation(); setFile(null); setResult(null); }}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (abortPollingRef.current) abortPollingRef.current.abort();
+                                        setFile(null);
+                                        setResult(null);
+                                        setStatus('idle');
+                                        setProgress(0);
+                                        setError(null);
+                                    }}
                                     className="p-2 hover:bg-neutral-700 rounded-full text-neutral-400 hover:text-red-400 transition-colors"
                                 >
                                     ✕
