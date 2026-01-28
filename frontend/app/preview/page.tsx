@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
+import ResultDisplay from "../../components/ResultDisplay";
 import { AnalysisResult, analyzeAudio } from "../../lib/api";
 
 type AppStatus = 'idle' | 'uploading' | 'analyzing' | 'ready' | 'error';
@@ -14,6 +15,7 @@ type ErrorState = {
 export default function PreviewPage() {
     const router = useRouter();
     const [file, setFile] = useState<File | null>(null);
+    const [audioUrl, setAudioUrl] = useState<string | null>(null);
     const [result, setResult] = useState<AnalysisResult | null>(null);
     const [status, setStatus] = useState<AppStatus>('idle');
     const [error, setError] = useState<ErrorState | null>(null);
@@ -21,8 +23,11 @@ export default function PreviewPage() {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const abortPollingRef = useRef<AbortController | null>(null);
     const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
-    const previewChords = result?.bars?.slice(0, 16) ?? [];
-    const hasMoreChords = (result?.bars?.length ?? 0) > previewChords.length;
+    useEffect(() => {
+        return () => {
+            if (audioUrl) URL.revokeObjectURL(audioUrl);
+        };
+    }, [audioUrl]);
 
     const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
@@ -32,6 +37,8 @@ export default function PreviewPage() {
                 return;
             }
             setFile(selectedFile);
+            if (audioUrl) URL.revokeObjectURL(audioUrl);
+            setAudioUrl(URL.createObjectURL(selectedFile));
             setError(null);
             setStatus('idle');
             setResult(null);
@@ -174,7 +181,13 @@ export default function PreviewPage() {
                                     </div>
                                 </div>
                                 <button
-                                    onClick={(e) => { e.stopPropagation(); setFile(null); setResult(null); }}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setFile(null);
+                                        setResult(null);
+                                        if (audioUrl) URL.revokeObjectURL(audioUrl);
+                                        setAudioUrl(null);
+                                    }}
                                     className="p-2 hover:bg-neutral-700 rounded-full text-neutral-400 hover:text-red-400 transition-colors"
                                 >
                                     ✕
@@ -250,26 +263,19 @@ export default function PreviewPage() {
                             </div>
                             <div className="bg-neutral-800 p-4 rounded-lg">
                                 <p className="text-xs text-neutral-400 uppercase tracking-wider mb-1">Chords</p>
-                                {previewChords.length ? (
-                                    <>
-                                        <div className="flex flex-wrap gap-2">
-                                            {previewChords.map((bar) => (
-                                                <span key={bar.bar} className="rounded bg-neutral-700 px-2 py-1 text-sm font-mono text-white">
-                                                    {bar.chord}
-                                                </span>
-                                            ))}
-                                        </div>
-                                        {hasMoreChords && (
-                                            <p className="text-xs text-neutral-500 mt-2">
-                                                Showing first {previewChords.length} bars.
-                                            </p>
-                                        )}
-                                    </>
-                                ) : (
-                                    <p className="text-sm text-neutral-400">No chords detected in preview range.</p>
-                                )}
+                                <p className="text-sm text-neutral-400">Preview up to 60 seconds.</p>
                             </div>
                         </div>
+
+                        {(result?.bars?.length ?? 0) > 0 ? (
+                            <div className="mt-8">
+                                <ResultDisplay result={result} audioUrl={audioUrl} />
+                            </div>
+                        ) : (
+                            <div className="text-center py-12 text-neutral-400">
+                                解析結果が空でした。別の音源でお試しください。
+                            </div>
+                        )}
 
                         <div className="mt-8 pt-8 border-t border-neutral-800 text-center">
                             <p className="text-neutral-400 mb-4">Want to see the full chords and export features?</p>
