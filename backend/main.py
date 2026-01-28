@@ -962,7 +962,7 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
             "is_preview": (mode == AnalyzeMode.PREVIEW),
             "analyzed_duration_sec": round(offset, 1),
             "export_allowed": (mode == AnalyzeMode.EARLY_ACCESS or mode == AnalyzeMode.FULL),
-            "bars": None if mode == AnalyzeMode.PREVIEW else all_bars
+            "bars": all_bars
         }
 
         jobs[job_id] = {
@@ -1170,4 +1170,3 @@ async def _process_analyze_url(url: str, mode: AnalyzeMode, cookies: UploadFile 
                 pass
 
         
-

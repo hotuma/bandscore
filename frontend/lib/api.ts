@@ -15,7 +15,7 @@ export interface AnalysisResult {
     duration_sec: number;
     time_signature: string;
     key: string;
-    bars: Bar[] | null; // Nullable for Preview
+    bars: Bar[] | null;
     audio_url?: string;
     // New fields
     mode?: AnalyzeMode;
