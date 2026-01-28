@@ -3,7 +3,7 @@ import { AnalysisResult } from '../lib/api';
 import { setChordVolume } from '../lib/chordAudio';
 import { playChordFromTabWithSoundFont } from '../lib/guitarSound';
 import { useMemo } from 'react';
-import { analysisResultToTimedChords } from '../lib/chordTimeline';
+// import { analysisResultToTimedChords } from '../lib/chordTimeline'; // unused
 
 
 interface ResultDisplayProps {
@@ -44,6 +44,8 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
     const barRefs = useRef<(HTMLDivElement | null)[]>([]);
     const lastPlayedBarRef = useRef<number>(-1);
 
+    const isPreview = result?.is_preview === true || result?.mode === 'PREVIEW';
+
     // Format duration (seconds -> mm:ss)
     const formatDuration = (seconds: number) => {
         const min = Math.floor(seconds / 60);
@@ -82,17 +84,18 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
         if (!n) return 1;
 
         const audioDur = audioDurationSec;
-        const analysisDur = result?.duration_sec ?? 0;
+        // Preview uses analyzed duration (audio might be longer)
+        const analyzedDur = Number(result?.analyzed_duration_sec ?? 0);
+        const fallbackDur = Number(result?.duration_sec ?? 0);
+        const analysisDur = (Number.isFinite(analyzedDur) && analyzedDur > 0) ? analyzedDur : fallbackDur;
 
-        // Prioritize actual audio duration if available, then analysis duration
-        const dur =
-            Number.isFinite(audioDur) && audioDur > 0
-                ? audioDur
-                : (Number.isFinite(analysisDur) && analysisDur > 0 ? analysisDur : 0);
+        const dur = isPreview
+            ? analysisDur
+            : ((Number.isFinite(audioDur) && audioDur > 0) ? audioDur : analysisDur);
 
         if (!dur) return 1;
         return dur / n;
-    }, [safeBars.length, result?.duration_sec, audioDurationSec]);
+    }, [safeBars.length, result?.duration_sec, result?.analyzed_duration_sec, audioDurationSec, isPreview]);
 
 
     // --- Audio Event Listeners (State Management Only) ---
@@ -122,6 +125,49 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
             audio.removeEventListener('ended', onEnded);
         };
     }, [audioUrl]); // Re-bind if audio source changes
+
+    // Preview: Stop playback if it exceeds analyzed range to prevent sync drift or errors
+    useEffect(() => {
+        if (!isPreview) return;
+        const audio = audioRef.current;
+        if (!audio) return;
+        const limit = Number(result?.analyzed_duration_sec ?? result?.duration_sec ?? 0);
+        if (!Number.isFinite(limit) || limit <= 0) return;
+
+        const onTimeUpdate = () => {
+            if (audio.currentTime >= limit) {
+                audio.pause();
+                audio.currentTime = limit;
+                setIsPlaying(false);
+                setCurrentBarIndex(safeBars.length ? safeBars.length - 1 : -1);
+                suppressScrollRef.current = Date.now() + 1000;
+            }
+        };
+        audio.addEventListener('timeupdate', onTimeUpdate);
+
+        // Prevent manual seeking beyond limit
+        const onSeeking = () => {
+            if (audio.currentTime >= limit) {
+                audio.currentTime = limit;
+                // If dragging, this keeps it clamped
+            }
+        };
+        audio.addEventListener('seeking', onSeeking);
+
+        return () => {
+            audio.removeEventListener('timeupdate', onTimeUpdate);
+            audio.removeEventListener('seeking', onSeeking);
+        };
+    }, [isPreview, result?.analyzed_duration_sec, result?.duration_sec, safeBars.length]);
+
+    // Ensure AutoChord re-triggers after seek
+    useEffect(() => {
+        const audio = audioRef.current;
+        if (!audio) return;
+        const onSeeked = () => { lastPlayedBarRef.current = -1; };
+        audio.addEventListener('seeked', onSeeked);
+        return () => audio.removeEventListener('seeked', onSeeked);
+    }, [audioUrl]);
 
     // --- Main Sync Loop (The "King" RAF) ---
     useEffect(() => {
@@ -246,10 +292,10 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
         });
     }, [autoChord, isPlaying, currentBarIndex, safeBars, secondsPerBar, chordVolume]);
 
-    // Initialize Volume
-    useMemo(() => {
+    // Initialize Volume (side-effect)
+    useEffect(() => {
         setChordVolume(chordVolume);
-    }, []);
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleBarClick = (barIndex: number) => {
         const bar = safeBars[barIndex];
@@ -267,8 +313,10 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
 
         if (audioRef.current) {
             // Adjust seek time by subtracting offset so effective time matches bar start
+            // Adjust seek time by subtracting offset so effective time matches bar start
             const targetTime = (barIndex * secondsPerBar) - offsetSec;
             audioRef.current.currentTime = Math.max(0, targetTime);
+            lastPlayedBarRef.current = -1; // ensure chord triggers after manual seek
             audioRef.current.play();
         }
     };
@@ -496,7 +544,13 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                         <span className="text-gray-400">AudioDur:</span>
                         <span>{audioDurationSec.toFixed(3)}s</span>
                         <span className="text-gray-400">AnalysisDur:</span>
-                        <span>{(result?.duration_sec ?? 0).toFixed(3)}s</span>
+                        <span>
+                            {(
+                                isPreview
+                                    ? (Number(result?.analyzed_duration_sec ?? result?.duration_sec ?? 0))
+                                    : (Number(audioDurationSec || result?.duration_sec || 0))
+                            ).toFixed(3)}s
+                        </span>
                     </div>
                 </div>
             )}
@@ -512,6 +566,9 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                                     audioRef.current.pause();
                                     audioRef.current.currentTime = 0;
                                     setIsPlaying(false);
+                                    audioRef.current.currentTime = 0;
+                                    setIsPlaying(false);
+                                    lastPlayedBarRef.current = -1;
                                     suppressScrollRef.current = Date.now() + 1000;
                                 }
                             }}

@@ -4,6 +4,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { AnalysisResult, analyzeAudio } from "../../lib/api";
+import ResultDisplay from "../../components/ResultDisplay";
 
 type AppStatus = 'idle' | 'uploading' | 'analyzing' | 'ready' | 'error';
 type ErrorState = {
@@ -17,6 +18,7 @@ export default function PreviewPage() {
     }, []);
     const router = useRouter();
     const [file, setFile] = useState<File | null>(null);
+    const [audioUrl, setAudioUrl] = useState<string | null>(null);
     const [result, setResult] = useState<AnalysisResult | null>(null);
     const [status, setStatus] = useState<AppStatus>('idle');
     const [error, setError] = useState<ErrorState | null>(null);
@@ -24,6 +26,12 @@ export default function PreviewPage() {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const abortPollingRef = useRef<AbortController | null>(null);
     const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
+
+    useEffect(() => {
+        return () => {
+            if (audioUrl) URL.revokeObjectURL(audioUrl);
+        };
+    }, [audioUrl]);
 
     const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
@@ -33,6 +41,8 @@ export default function PreviewPage() {
                 return;
             }
             setFile(selectedFile);
+            if (audioUrl) URL.revokeObjectURL(audioUrl);
+            setAudioUrl(URL.createObjectURL(selectedFile));
             setError(null);
             setStatus('idle');
             setResult(null);
@@ -183,6 +193,8 @@ export default function PreviewPage() {
                                         if (abortPollingRef.current) abortPollingRef.current.abort();
                                         setFile(null);
                                         setResult(null);
+                                        if (audioUrl) URL.revokeObjectURL(audioUrl);
+                                        setAudioUrl(null);
                                         setStatus('idle');
                                         setProgress(0);
                                         setError(null);
@@ -253,30 +265,20 @@ export default function PreviewPage() {
                                 <p className="text-2xl font-mono text-white">{result.analyzed_duration_sec}s <span className="text-sm text-neutral-500">/ 60s max</span></p>
                             </div>
                             <div className="bg-neutral-800 p-4 rounded-lg">
-                                <p className="text-xs text-neutral-400 uppercase tracking-wider mb-1">BPM</p>
-                                <p className="text-2xl font-mono text-white">{result.bpm}</p>
-                            </div>
-                            <div className="bg-neutral-800 p-4 rounded-lg">
                                 <p className="text-xs text-neutral-400 uppercase tracking-wider mb-1">Key</p>
                                 <p className="text-2xl font-mono text-white">{result.key}</p>
                             </div>
                         </div>
 
-                        {/* PREVIEW CHORD LIST */}
-                        <div className="mt-8">
-                            <h3 className="text-xs text-neutral-400 uppercase tracking-wider mb-4">Detected Chords (Preview Limit)</h3>
-                            <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-2">
-                                {(result.bars || []).map((bar, idx) => (
-                                    <div key={idx} className="bg-neutral-800 p-2 rounded text-center border border-neutral-700">
-                                        <span className="text-xs text-neutral-500 block mb-1">Bar {bar.bar}</span>
-                                        <span className="font-bold text-teal-400 font-mono" translate="no">{bar.chord}</span>
-                                    </div>
-                                ))}
+                        {(result?.bars?.length ?? 0) > 0 && audioUrl ? (
+                            <div className="mt-4">
+                                <ResultDisplay result={result} audioUrl={audioUrl} />
                             </div>
-                            {(result.bars || []).length === 0 && (
-                                <p className="text-neutral-500 italic">No chords detected in the preview segment.</p>
-                            )}
-                        </div>
+                        ) : (
+                            <div className="text-center py-12 text-neutral-400">
+                                No chords detected. Please try another file.
+                            </div>
+                        )}
 
                         <div className="mt-8 pt-8 border-t border-neutral-800 text-center">
                             <p className="text-neutral-400 mb-4">Want to see the full chords and export features?</p>
