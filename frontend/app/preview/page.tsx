@@ -58,12 +58,12 @@ export default function PreviewPage() {
                 setProgress(p);
 
                 // Timeout checks
-                if (!data.started_at && (Date.now() - submittedAt > 15000)) throw new Error("JOB_NOT_STARTED");
+                if (!data.started_at && (Date.now() - submittedAt > 30000)) throw new Error("JOB_NOT_STARTED");
 
                 if (p > lastProgress) {
                     lastProgress = p;
                     lastUpdateTime = Date.now();
-                } else if (Date.now() - lastUpdateTime > 30000) {
+                } else if (Date.now() - lastUpdateTime > 60000) {
                     throw new Error("JOB_STALLED");
                 }
 
@@ -242,20 +242,26 @@ export default function PreviewPage() {
                                 <p className="text-xs text-neutral-400 uppercase tracking-wider mb-1">BPM</p>
                                 <p className="text-2xl font-mono text-white">{result.bpm}</p>
                             </div>
-                            <div className="bg-neutral-800 p-4 rounded-lg opacity-50">
+                            <div className="bg-neutral-800 p-4 rounded-lg">
                                 <p className="text-xs text-neutral-400 uppercase tracking-wider mb-1">Key</p>
-                                <div className="flex items-center gap-2">
-                                    <span className="text-xl font-mono text-white">Hidden</span>
-                                    <span className="text-xs bg-neutral-700 px-2 py-0.5 rounded text-neutral-300">Preview</span>
-                                </div>
+                                <p className="text-2xl font-mono text-white">{result.key}</p>
                             </div>
-                            <div className="bg-neutral-800 p-4 rounded-lg opacity-50">
-                                <p className="text-xs text-neutral-400 uppercase tracking-wider mb-1">Chords</p>
-                                <div className="flex items-center gap-2">
-                                    <span className="text-xl font-mono text-white">Hidden</span>
-                                    <span className="text-xs bg-neutral-700 px-2 py-0.5 rounded text-neutral-300">Preview</span>
-                                </div>
+                        </div>
+
+                        {/* PREVIEW CHORD LIST */}
+                        <div className="mt-8">
+                            <h3 className="text-xs text-neutral-400 uppercase tracking-wider mb-4">Detected Chords (Preview Limit)</h3>
+                            <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-2">
+                                {(result.bars || []).map((bar, idx) => (
+                                    <div key={idx} className="bg-neutral-800 p-2 rounded text-center border border-neutral-700">
+                                        <span className="text-xs text-neutral-500 block mb-1">Bar {bar.bar}</span>
+                                        <span className="font-bold text-teal-400 font-mono" translate="no">{bar.chord}</span>
+                                    </div>
+                                ))}
                             </div>
+                            {(result.bars || []).length === 0 && (
+                                <p className="text-neutral-500 italic">No chords detected in the preview segment.</p>
+                            )}
                         </div>
 
                         <div className="mt-8 pt-8 border-t border-neutral-800 text-center">
