@@ -54,6 +54,9 @@ export default function PreviewPage() {
         const base = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
         let lastProgress = -1;
         let lastUpdateTime = Date.now();
+        let fetchFailCount = 0;
+        const STALL_SEC = 20;
+        const MAX_FETCH_FAIL = 5;
 
         while (true) {
             if (signal.aborted) return;
@@ -69,17 +72,21 @@ export default function PreviewPage() {
                 const p = typeof data.progress === "number" ? data.progress : 0;
                 console.log("[poll] status", { jobId, jobStatus, p });
 
-                setProgress(p);
+                fetchFailCount = 0; // status fetch success
 
-                // Timeout checks
-                if (!data.started_at && (Date.now() - submittedAt > 30000)) throw new Error("JOB_NOT_STARTED");
-
-                if (p > lastProgress) {
+                if (p !== lastProgress) {
                     lastProgress = p;
                     lastUpdateTime = Date.now();
-                } else if (Date.now() - lastUpdateTime > 60000) {
+                }
+
+                // Watchdog: no progress too long => fail fast (avoid infinite spinner)
+                const stalled = (Date.now() - lastUpdateTime) > STALL_SEC * 1000;
+                if (stalled && jobStatus === "analyzing") {
                     throw new Error("JOB_STALLED");
                 }
+
+                // Timeout checks (Handled by watchdog now, but keeping start check)
+                if (!data.started_at && (Date.now() - submittedAt > 30000)) throw new Error("JOB_NOT_STARTED");
 
                 if (jobStatus === "error") throw new Error(data.error || "ANALYSIS_FAILED_BG");
 
@@ -93,15 +100,32 @@ export default function PreviewPage() {
                     setStatus('ready');
                     return;
                 }
+                setProgress(p);
             } catch (e: any) {
                 if (signal.aborted || e.name === "AbortError") return;
                 console.error("Polling error:", e);
-                setError({
-                    code: 'ANALYSIS_ERROR',
-                    message: typeof e.message === 'string' ? e.message : 'Analysis failed during processing.'
-                });
-                setStatus('error');
-                return;
+
+                fetchFailCount += 1;
+                if (fetchFailCount >= MAX_FETCH_FAIL) {
+                    setError({
+                        code: 'NETWORK_UNSTABLE',
+                        message: 'Network or backend is unstable. Please retry.'
+                    });
+                    setStatus('error');
+                    return;
+                }
+
+                if (e?.message === "JOB_LOST") {
+                    setError({ code: 'JOB_LOST', message: 'Job was lost. Please retry.' });
+                    setStatus('error');
+                    return;
+                }
+                if (e?.message === "JOB_STALLED") {
+                    setError({ code: 'JOB_STALLED', message: 'Analysis stalled. Please retry.' });
+                    setStatus('error');
+                    return;
+                }
+                // otherwise keep looping a bit (transient)
             }
         }
     };
@@ -245,9 +269,15 @@ export default function PreviewPage() {
                 {error && (
                     <div className="bg-red-500/10 border border-red-500/50 rounded-lg p-4 flex items-start space-x-3 text-red-200">
                         <span className="text-xl">⚠️</span>
-                        <div>
+                        <div className="flex-1">
                             <h3 className="font-bold text-red-400 text-sm tracking-wide">{error.code}</h3>
                             <p className="text-sm mt-1">{error.message}</p>
+                            <button
+                                onClick={handleAnalyze}
+                                className="mt-3 px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-100 text-xs font-bold uppercase tracking-wider rounded transition-colors"
+                            >
+                                Retry Analysis
+                            </button>
                         </div>
                     </div>
                 )}
