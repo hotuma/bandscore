@@ -310,15 +310,7 @@ export default function PreviewPage() {
                             </div>
                         )}
 
-                        <div className="mt-8 pt-8 border-t border-neutral-800 text-center">
-                            <p className="text-neutral-400 mb-4">Want to see the full chords and export features?</p>
-                            <button
-                                onClick={() => router.push('/early-access')}
-                                className="px-8 py-3 bg-gradient-to-r from-teal-500 to-blue-500 hover:from-teal-400 hover:to-blue-400 text-white font-bold rounded-lg shadow-lg hover:shadow-teal-500/20 transition-all"
-                            >
-                                Go to Early Access
-                            </button>
-                        </div>
+
                     </div>
                 )}
             </div>
