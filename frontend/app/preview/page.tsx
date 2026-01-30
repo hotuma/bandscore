@@ -142,10 +142,27 @@ export default function PreviewPage() {
         setProgress(0);
 
         try {
-            // Initiate Analysis
-            // analyzeAudio calls /analyze/preview internally if mode is PREVIEW
-            // and returns { job_id: "..." } technically
-            const response: any = await analyzeAudio(file, 'PREVIEW');
+            // INIT auto-retry (avoid user churn)
+            const MAX_INIT_RETRY = 3;
+            let lastErr: any = null;
+            let response: any = null;
+
+            for (let attempt = 1; attempt <= MAX_INIT_RETRY; attempt++) {
+                try {
+                    // initiate analysis
+                    response = await analyzeAudio(file, 'PREVIEW');
+                    if (response?.job_id) break;
+                    throw new Error("No Job ID returned");
+                } catch (e: any) {
+                    console.warn(`Init attempt ${attempt} failed:`, e);
+                    lastErr = e;
+                    // backoff: 0.8s, 1.6s, 3.2s
+                    const delayMs = 800 * Math.pow(2, attempt - 1);
+                    await new Promise(r => setTimeout(r, delayMs));
+                }
+            }
+
+            if (!response?.job_id) throw lastErr || new Error("INIT_FAILED");
 
             if (response.job_id) {
                 pollJob(response.job_id, controller.signal, Date.now());
