@@ -57,7 +57,7 @@ function normalizeAnalysisResult(data: any): AnalysisResult {
     return data as AnalysisResult;
 }
 
-export async function analyzeAudio(file: File, mode: AnalyzeMode = 'EARLY_ACCESS'): Promise<AnalysisResult> {
+export async function analyzeAudio(file: File, mode: AnalyzeMode = 'EARLY_ACCESS', timeoutMs: number = 180000, opts?: { signal?: AbortSignal }): Promise<AnalysisResult> {
     const formData = new FormData();
     formData.append('file', file);
 
@@ -74,7 +74,8 @@ export async function analyzeAudio(file: File, mode: AnalyzeMode = 'EARLY_ACCESS
     const response = await fetchWithTimeout(url, {
         method: 'POST',
         body: formData,
-        timeout: 180000, // 3 minutes
+        timeout: timeoutMs,
+        signal: opts?.signal,
     });
 
     if (!response.ok) {

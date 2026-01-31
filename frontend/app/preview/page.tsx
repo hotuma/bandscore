@@ -25,7 +25,7 @@ export default function PreviewPage() {
     const [progress, setProgress] = useState<number>(0);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const abortPollingRef = useRef<AbortController | null>(null);
-    const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
+    const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15MB (Lower limit for mobile stability)
 
     useEffect(() => {
         return () => {
@@ -37,7 +37,7 @@ export default function PreviewPage() {
         if (e.target.files && e.target.files[0]) {
             const selectedFile = e.target.files[0];
             if (selectedFile.size > MAX_FILE_SIZE) {
-                setError({ code: 'FILE_TOO_LARGE', message: 'Maximum file size is 20MB.' });
+                setError({ code: 'FILE_TOO_LARGE', message: 'Maximum file size is 15MB.' });
                 return;
             }
             setFile(selectedFile);
@@ -55,7 +55,7 @@ export default function PreviewPage() {
         let lastProgress = -1;
         let lastUpdateTime = Date.now();
         let fetchFailCount = 0;
-        const STALL_SEC = 20;
+        const STALL_SEC = 60;
         const MAX_FETCH_FAIL = 5;
 
         while (true) {
@@ -79,8 +79,11 @@ export default function PreviewPage() {
                     lastUpdateTime = Date.now();
                 }
 
-                // Watchdog: no progress too long => fail fast (avoid infinite spinner)
-                const stalled = (Date.now() - lastUpdateTime) > STALL_SEC * 1000;
+                // Watchdog: heartbeat check (more robust than progress)
+                // data.updated_at is in seconds (Python time.time())
+                const heartbeatMs = (data.updated_at || data.submitted_at) * 1000;
+                const stalled = (Date.now() - heartbeatMs) > STALL_SEC * 1000;
+
                 if (stalled && jobStatus === "analyzing") {
                     throw new Error("JOB_STALLED");
                 }
@@ -142,6 +145,17 @@ export default function PreviewPage() {
         setProgress(0);
 
         try {
+            // 1. Pre-load check (Mobile/iCloud optimization)
+            // Read to array buffer to ensure file is fully local before POST
+            // This prevents "upload stall" when device tries to stream from cloud
+            const buffer = await file.arrayBuffer();
+            console.log("[upload] preloaded bytes", buffer.byteLength);
+
+            const safeFile = new File([buffer], file.name, {
+                type: file.type || 'audio/mpeg',
+                lastModified: file.lastModified,
+            });
+
             // INIT auto-retry (avoid user churn)
             const MAX_INIT_RETRY = 3;
             let lastErr: any = null;
@@ -149,8 +163,11 @@ export default function PreviewPage() {
 
             for (let attempt = 1; attempt <= MAX_INIT_RETRY; attempt++) {
                 try {
-                    // initiate analysis
-                    response = await analyzeAudio(file, 'PREVIEW');
+                    console.log(`[upload] start analyzeAudio attempt ${attempt}`);
+                    // initiate analysis with 25s timeout (Fail fast -> Retry)
+                    response = await analyzeAudio(safeFile, 'PREVIEW', 25000, { signal: controller.signal });
+                    console.log("[upload] analyzeAudio returned", response);
+
                     if (response?.job_id) break;
                     throw new Error("No Job ID returned");
                 } catch (e: any) {
