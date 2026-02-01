@@ -72,7 +72,7 @@ export default function PreviewPage() {
                 const p = typeof data.progress === "number" ? data.progress : 0;
                 console.log("[poll] status", { jobId, jobStatus, p });
 
-                fetchFailCount = 0; // status fetch success
+                // Status fetch success - but wait to reset fail count until logical success confirm
 
                 if (p !== lastProgress) {
                     lastProgress = p;
@@ -81,15 +81,16 @@ export default function PreviewPage() {
 
                 // Watchdog: heartbeat check (more robust than progress)
                 // data.updated_at is in seconds (Python time.time())
-                const heartbeatMs = (data.updated_at || data.submitted_at) * 1000;
-                const stalled = (Date.now() - heartbeatMs) > STALL_SEC * 1000;
+                const hbSec = data.updated_at ?? data.submitted_at;
+                if (!hbSec) throw new Error("JOB_NO_HEARTBEAT");
+
+                const stalled = (Date.now() - hbSec * 1000) > STALL_SEC * 1000;
 
                 if (stalled && jobStatus === "analyzing") {
                     throw new Error("JOB_STALLED");
                 }
 
-                // Timeout checks (Handled by watchdog now, but keeping start check)
-                if (!data.started_at && (Date.now() - submittedAt > 30000)) throw new Error("JOB_NOT_STARTED");
+                // started_at is optional; heartbeat (updated_at/submitted_at) is the source of truth
 
                 if (jobStatus === "error") throw new Error(data.error || "ANALYSIS_FAILED_BG");
 
@@ -99,10 +100,12 @@ export default function PreviewPage() {
                     if (!r.ok) throw new Error("RESULT_FETCH_FAILED");
                     const resultData: AnalysisResult = await r.json();
                     console.log("ANALYZE RESULT", resultData);
+                    fetchFailCount = 0; // complete success
                     setResult(resultData);
                     setStatus('ready');
                     return;
                 }
+                fetchFailCount = 0; // Valid status update received
                 setProgress(p);
             } catch (e: any) {
                 if (signal.aborted || e.name === "AbortError") return;
@@ -233,7 +236,7 @@ export default function PreviewPage() {
                                 </div>
                                 <div>
                                     <p className="text-lg font-medium text-neutral-200">Select Audio File to Preview</p>
-                                    <p className="text-sm text-neutral-500">MP3, WAV, M4A (Max 20MB)</p>
+                                    <p className="text-sm text-neutral-500">MP3, WAV, M4A (Max 15MB)</p>
                                 </div>
                             </div>
                         ) : (

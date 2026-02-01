@@ -28,23 +28,39 @@ const API_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
 
 async function fetchWithTimeout(resource: string, options: RequestInit & { timeout?: number }) {
     const { timeout = 180000, ...fetchOptions } = options;
+    const timeoutController = new AbortController();
+    const id = setTimeout(() => timeoutController.abort(), timeout);
 
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), timeout);
+    // If caller provided a signal, make it also abort the timeoutController.
+    const externalSignal = fetchOptions.signal as AbortSignal | undefined;
+    const onExternalAbort = () => timeoutController.abort();
+
+    if (externalSignal) {
+        if (externalSignal.aborted) {
+            timeoutController.abort();
+        } else {
+            externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+        }
+    }
 
     try {
         const response = await fetch(resource, {
             ...fetchOptions,
-            signal: controller.signal,
+            // Always use the timeoutController signal (it will also be aborted by externalSignal)
+            signal: timeoutController.signal,
         });
         clearTimeout(id);
         return response;
-    } catch (error) {
+    } catch (error: any) {
         clearTimeout(id);
         if (error instanceof DOMException && error.name === 'AbortError') {
-            throw new Error(`Request timed out after ${timeout / 1000}s`);
+            throw new Error(`Request aborted or timed out after ${timeout / 1000}s`);
         }
         throw error;
+    } finally {
+        if (externalSignal) {
+            externalSignal.removeEventListener('abort', onExternalAbort);
+        }
     }
 }
 
