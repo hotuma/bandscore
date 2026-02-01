@@ -308,13 +308,34 @@ export default function PreviewPage() {
                         <span className="text-xl">⚠️</span>
                         <div className="flex-1">
                             <h3 className="font-bold text-red-400 text-sm tracking-wide">{error.code}</h3>
-                            <p className="text-sm mt-1">{error.message}</p>
-                            <button
-                                onClick={handleAnalyze}
-                                className="mt-3 px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-100 text-xs font-bold uppercase tracking-wider rounded transition-colors"
-                            >
-                                Retry Analysis
-                            </button>
+                            <p className="text-sm mt-1 mb-3">{error.message}</p>
+
+                            {/* Reload Hint */}
+                            <div className="text-xs text-red-200/80 bg-red-950/30 p-3 rounded mb-3 border border-red-500/20">
+                                <p className="font-semibold text-red-100 mb-1">Analysis Stuck?</p>
+                                <ul className="list-disc pl-4 space-y-1 mb-2">
+                                    <li>Try <span className="font-bold text-white">Retry Analysis</span> first.</li>
+                                    <li>If it fails again, please <span className="font-bold text-white">Reload Page</span>.</li>
+                                </ul>
+                                <p className="opacity-75">
+                                    (Mobile connections may pause uploads in background)
+                                </p>
+                            </div>
+
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={handleAnalyze}
+                                    className="px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-100 text-xs font-bold uppercase tracking-wider rounded transition-colors"
+                                >
+                                    Retry Analysis
+                                </button>
+                                <button
+                                    onClick={() => window.location.reload()}
+                                    className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-bold uppercase tracking-wider rounded transition-colors"
+                                >
+                                    Reload Page
+                                </button>
+                            </div>
                         </div>
                     </div>
                 )}
