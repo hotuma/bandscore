@@ -207,40 +207,46 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
             try {
                 if (audioRef.current) {
                     const currentTime = audioRef.current.currentTime;
-                    // Changed to SUBTRACT offset to delay the visual relative to audio
+
+                    // 1. Audio Playback Index (Raw time, no offset) - strict audio sync
+                    let playIndex = -1;
+                    if (currentTime > 0) {
+                        playIndex = Math.floor(currentTime / secondsPerBar);
+                    }
+                    // Clamp playIndex
+                    if (safeBars.length === 0) {
+                        playIndex = -1;
+                    } else if (playIndex >= safeBars.length) {
+                        playIndex = safeBars.length - 1;
+                    }
+
+                    // 2. Visual UI Index (Offset adjusted) - aligns chord highlight with audio perception
                     // offsetSec is typically positive latency compensation
                     const effectiveTime = currentTime - offsetSec;
-
-                    // Calculate current bar (0-indexed)
-                    let index = -1;
-
+                    let uiIndex = -1;
                     if (effectiveTime > 0) {
-                        index = Math.floor(effectiveTime / secondsPerBar);
+                        uiIndex = Math.floor(effectiveTime / secondsPerBar);
                     }
-
-                    // Clamp index to valid range
+                    // Clamp uiIndex
                     if (safeBars.length === 0) {
-                        index = -1;
-                    } else if (index >= safeBars.length) {
-                        index = safeBars.length - 1;
+                        uiIndex = -1;
+                    } else if (uiIndex >= safeBars.length) {
+                        uiIndex = safeBars.length - 1;
                     }
 
-                    if (index < 0) {
-                        index = -1;
-                    }
-
-                    // --- AutoChord trigger at the exact moment bar changes (no React render delay) ---
+                    // --- AutoChord trigger using playIndex (Sound) ---
                     if (
                         autoChord &&
-                        index >= 0 &&
-                        index !== lastPlayedBarRef.current
+                        playIndex >= 0 &&
+                        playIndex !== lastPlayedBarRef.current
                     ) {
-                        lastPlayedBarRef.current = index;
-                        playBarChord(index);
+                        lastPlayedBarRef.current = playIndex;
+                        playBarChord(playIndex);
                     }
 
+                    // --- Update UI using uiIndex (Visuals) ---
                     setCurrentBarIndex(prev => {
-                        if (prev !== index) return index;
+                        if (prev !== uiIndex) return uiIndex;
                         return prev;
                     });
                 }
