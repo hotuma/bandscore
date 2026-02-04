@@ -103,7 +103,10 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
         const audio = audioRef.current;
         if (!audio) return;
 
-        const onPlay = () => setIsPlaying(true);
+        const onPlay = () => {
+            setIsPlaying(true);
+            lastPlayedBarRef.current = -1; // Reset to ensure first chord plays
+        };
         const onPause = () => setIsPlaying(false);
         const onEnded = () => {
             setIsPlaying(false);
@@ -180,6 +183,26 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
             return;
         }
 
+        // Helper to play chord directly (avoids React render latency)
+        const playBarChord = (barIndex: number) => {
+            const bar = safeBars[barIndex];
+            const frets = bar?.tab?.frets;
+            if (!frets) return;
+
+            // Sustain control: Play for the duration of the bar (sustainSec)
+            const sustainSec = Math.min(
+                1.8,                         // Upper limit (prevent too long sustain)
+                Math.max(0.25, secondsPerBar * 0.95) // Lower limit (prevent staccato), 0.95 for legato
+            );
+
+            playChordFromTabWithSoundFont(frets, {
+                durationSec: sustainSec,
+                gain: chordVolume
+            }).catch((e) => {
+                console.error("Failed to play chord", e);
+            });
+        };
+
         const loop = () => {
             try {
                 if (audioRef.current) {
@@ -206,6 +229,16 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                         index = -1;
                     }
 
+                    // --- AutoChord trigger at the exact moment bar changes (no React render delay) ---
+                    if (
+                        autoChord &&
+                        index >= 0 &&
+                        index !== lastPlayedBarRef.current
+                    ) {
+                        lastPlayedBarRef.current = index;
+                        playBarChord(index);
+                    }
+
                     setCurrentBarIndex(prev => {
                         if (prev !== index) return index;
                         return prev;
@@ -225,7 +258,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                 rafIdRef.current = null;
             }
         };
-    }, [isPlaying, result, offsetSec, secondsPerBar, safeBars]);
+    }, [isPlaying, offsetSec, secondsPerBar, safeBars, autoChord, chordVolume]);
 
     // Auto-scroll effect
     useEffect(() => {
@@ -259,38 +292,6 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
             window.removeEventListener('touchmove', handleScroll);
         }
     }, [isPlaying, autoScroll]);
-
-    // Auto Chord Playback (Synchronized with visual grid)
-    useEffect(() => {
-        if (!autoChord) return;
-
-        if (currentBarIndex < 0) return;
-
-        // Debounce/Check if playing?
-        // If we want it strictly during playback:
-        if (!isPlaying) return;
-
-        // Prevent re-triggering the same bar repeatedly
-        if (lastPlayedBarRef.current === currentBarIndex) return;
-        lastPlayedBarRef.current = currentBarIndex;
-
-        const bar = safeBars[currentBarIndex];
-        const frets = bar?.tab?.frets;
-        if (!frets) return;
-
-        // Sustain control: Play for the duration of the bar (sustainSec)
-        const sustainSec = Math.min(
-            1.8,                         // Upper limit (prevent too long sustain)
-            Math.max(0.25, secondsPerBar * 0.95) // Lower limit (prevent staccato), 0.95 for legato
-        );
-
-        playChordFromTabWithSoundFont(frets, {
-            durationSec: sustainSec,
-            gain: chordVolume
-        }).catch((e) => {
-            console.error("Failed to play chord", e);
-        });
-    }, [autoChord, isPlaying, currentBarIndex, safeBars, secondsPerBar, chordVolume]);
 
     // Initialize Volume (side-effect)
     useEffect(() => {

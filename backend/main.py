@@ -1,8 +1,9 @@
 import os
+import anyio
 
 import psutil
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -67,6 +68,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def log_req_lifecycle(request: Request, call_next):
+    t0 = time.time()
+    print(f"[REQ-START] {request.method} {request.url.path}")
+    try:
+        resp = await call_next(request)
+        return resp
+    finally:
+        dt = (time.time() - t0) * 1000
+        print(f"[REQ-END]   {request.method} {request.url.path} {dt:.1f}ms")
+
 
 # --- Job store (NEW) ---
 jobs: Dict[str, Dict[str, Any]] = {}
@@ -77,6 +89,14 @@ def cleanup_jobs():
     expired = [jid for jid, j in jobs.items() if j.get("expires_at", 0) < now]
     for jid in expired:
         jobs.pop(jid, None)
+
+    for jid in expired:
+        jobs.pop(jid, None)
+
+def _save_upload_sync(src_fileobj, dst_path: str):
+    os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+    with open(dst_path, "wb") as f:
+        shutil.copyfileobj(src_fileobj, f, length=1024 * 1024)  # 1MB chunk
 
 # --- Types ---
 
@@ -1015,6 +1035,7 @@ async def analyze_preview(
     file: UploadFile = File(...), 
     background_tasks: BackgroundTasks = None
 ):
+    print(f"[EP] entered /analyze/preview {file.filename} {file.content_type}")
     # Force PREVIEW mode, ignore client input
     return await _process_analyze(file, AnalyzeMode.PREVIEW)
 
@@ -1054,8 +1075,9 @@ async def _process_analyze(file: UploadFile, mode: AnalyzeMode):
     safe_filename = f"{job_id}{ext}"
     file_path = os.path.join(TEMP_DIR, safe_filename)
 
-    with open(file_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+    # Use to_thread to prevent blocking event loop during file save
+    # This solves the "pending" response issue for large uploads
+    await anyio.to_thread.run_sync(_save_upload_sync, file.file, file_path)
 
     # Use Thread instead of BackgroundTasks for better survival on Render free tier
     # (BackgroundTasks are tied to request lifecycle, Thread is slightly more detached)
