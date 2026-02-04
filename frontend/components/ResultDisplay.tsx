@@ -1,7 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { AnalysisResult } from '../lib/api';
 import { setChordVolume } from '../lib/chordAudio';
-import { playChordFromTabWithSoundFont } from '../lib/guitarSound';
+import { playChordFromTabWithSoundFont, getAudioContextTime } from '../lib/guitarSound';
 import { useMemo } from 'react';
 // import { analysisResultToTimedChords } from '../lib/chordTimeline'; // unused
 
@@ -43,6 +43,11 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
     // Refs for auto-scrolling
     const barRefs = useRef<(HTMLDivElement | null)[]>([]);
     const lastPlayedBarRef = useRef<number>(-1);
+
+    // Scheduler refs
+    const schedulingBarRef = useRef<number>(0);      // Next bar to schedule
+    const schedulerTimerRef = useRef<number | null>(null);
+    const lastScheduledBarRef = useRef<number>(-1);  // Prevent double scheduling
 
     const isPreview = result?.is_preview === true || result?.mode === 'PREVIEW';
 
@@ -105,7 +110,18 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
 
         const onPlay = () => {
             setIsPlaying(true);
-            lastPlayedBarRef.current = -1; // Reset to ensure first chord plays
+            lastPlayedBarRef.current = -1; // Reset immediate trigger (legacy/safety)
+
+            // Reset scheduling so the next bar is scheduled correctly
+            const audio = audioRef.current;
+            if (audio) {
+                const t = audio.currentTime;
+                const current = t > 0 ? Math.floor(t / secondsPerBar) : 0;
+                schedulingBarRef.current = Math.min(safeBars.length - 1, Math.max(0, current));
+            } else {
+                schedulingBarRef.current = 0;
+            }
+            lastScheduledBarRef.current = -1;
         };
         const onPause = () => setIsPlaying(false);
         const onEnded = () => {
@@ -167,10 +183,24 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
     useEffect(() => {
         const audio = audioRef.current;
         if (!audio) return;
-        const onSeeked = () => { lastPlayedBarRef.current = -1; };
+
+        const onSeeked = () => {
+            lastPlayedBarRef.current = -1;
+
+            // Reset scheduling after seek so chords re-lock immediately
+            const audio = audioRef.current;
+            if (audio) {
+                const t = audio.currentTime;
+                const current = t > 0 ? Math.floor(t / secondsPerBar) : 0;
+                schedulingBarRef.current = Math.min(safeBars.length - 1, Math.max(0, current));
+            } else {
+                schedulingBarRef.current = 0;
+            }
+            lastScheduledBarRef.current = -1;
+        };
         audio.addEventListener('seeked', onSeeked);
         return () => audio.removeEventListener('seeked', onSeeked);
-    }, [audioUrl]);
+    }, [audioUrl, safeBars.length, secondsPerBar]);
 
     // --- Main Sync Loop (The "King" RAF) ---
     useEffect(() => {
@@ -235,6 +265,9 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                     }
 
                     // --- AutoChord trigger using playIndex (Sound) ---
+                    // IMMEDIATE TRIGGER REMOVED in favor of Lookahead Scheduler
+                    // kept only for reference if we need to rollback
+                    /*
                     if (
                         autoChord &&
                         playIndex >= 0 &&
@@ -243,6 +276,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                         lastPlayedBarRef.current = playIndex;
                         playBarChord(playIndex);
                     }
+                    */
 
                     // --- Update UI using uiIndex (Visuals) ---
                     setCurrentBarIndex(prev => {
@@ -265,6 +299,92 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
             }
         };
     }, [isPlaying, offsetSec, secondsPerBar, safeBars, autoChord, chordVolume]);
+
+    // --- Lookahead Scheduler (The "Future" Sync) ---
+    useEffect(() => {
+        // Stop scheduler if not playing or AutoChord off
+        if (!isPlaying || !autoChord) {
+            if (schedulerTimerRef.current != null) {
+                window.clearInterval(schedulerTimerRef.current);
+                schedulerTimerRef.current = null;
+            }
+            return;
+        }
+
+        const audio = audioRef.current;
+        if (!audio) return;
+
+        const LOOKAHEAD_SEC = 0.15; // 150ms window
+        const TICK_MS = 25;
+
+        const tick = () => {
+            try {
+                if (!audioRef.current) return;
+                const a = audioRef.current;
+                if (a.paused) return;
+
+                const ctxNow = getAudioContextTime();
+                if (ctxNow == null) return;
+
+                const tAudio = a.currentTime;
+
+                // Initialize schedulingBarRef if needed (safety fallback)
+                if (schedulingBarRef.current < 0 || schedulingBarRef.current >= safeBars.length) {
+                    const cur = tAudio > 0 ? Math.floor(tAudio / secondsPerBar) : 0;
+                    schedulingBarRef.current = Math.min(safeBars.length - 1, Math.max(0, cur));
+                    lastScheduledBarRef.current = -1;
+                }
+
+                // Schedule as many bars as fall inside the lookahead window
+                while (schedulingBarRef.current < safeBars.length) {
+                    const barIndex = schedulingBarRef.current;
+
+                    // Target bar start time (audio clock)
+                    const barStartAudio = barIndex * secondsPerBar;
+
+                    const delta = barStartAudio - tAudio; // seconds until this bar start in audio time
+                    if (delta > LOOKAHEAD_SEC) break;     // too far in the future
+                    if (delta < -0.05) {                  // already passed; skip forward
+                        schedulingBarRef.current += 1;
+                        continue;
+                    }
+
+                    if (barIndex !== lastScheduledBarRef.current) {
+                        // Bridge clocks: when does this happen in AudioContext time?
+                        // whenSec = now(Ctx) + delta
+                        const whenSec = ctxNow + Math.max(0, delta);
+
+                        const bar = safeBars[barIndex];
+                        const frets = bar?.tab?.frets;
+                        if (frets) {
+                            const sustainSec = Math.min(1.8, Math.max(0.25, secondsPerBar * 0.95));
+                            playChordFromTabWithSoundFont(frets, {
+                                durationSec: sustainSec,
+                                gain: chordVolume,
+                                whenSec,
+                                strumSec: 0.015, // tighter strum for scheduled playback
+                            }).catch(console.error);
+                        }
+
+                        lastScheduledBarRef.current = barIndex;
+                    }
+
+                    schedulingBarRef.current += 1;
+                }
+            } catch (e) {
+                console.error("Scheduler tick error:", e);
+            }
+        };
+
+        schedulerTimerRef.current = window.setInterval(tick, TICK_MS);
+
+        return () => {
+            if (schedulerTimerRef.current != null) {
+                window.clearInterval(schedulerTimerRef.current);
+                schedulerTimerRef.current = null;
+            }
+        };
+    }, [isPlaying, autoChord, secondsPerBar, safeBars, chordVolume]);
 
     // Auto-scroll effect
     useEffect(() => {

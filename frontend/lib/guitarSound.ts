@@ -34,6 +34,15 @@ export function getGuitar(): Promise<GuitarInstrument | null> {
     return guitarPromise;
 }
 
+/**
+ * Get the current time from the shared AudioContext (if initialized).
+ * Used for synchronizing external schedulers.
+ */
+export function getAudioContextTime(): number | null {
+    return audioContext ? audioContext.currentTime : null;
+}
+
+
 // Standard Tuning E2 A2 D3 G3 B3 E4 MIDI notes
 const STANDARD_TUNING_MIDI = [40, 45, 50, 55, 59, 64];
 
@@ -73,6 +82,8 @@ export function fretsToMidiNotes(
 export type PlayChordOptions = {
     durationSec?: number;
     gain?: number;
+    whenSec?: number; // AudioContext absolute time
+    strumSec?: number; // Stagger time per string (default 0.02)
 };
 
 /**
@@ -99,15 +110,20 @@ export async function playChordFromTabWithSoundFont(
         }
     }
 
-    const now = audioContext.currentTime;
     const duration = options?.durationSec ?? 2.0;
     const gain = options?.gain ?? 1.0;
+    const strum = options?.strumSec ?? 0.02;
+
+    // NEW: scheduled playback support
+    const baseWhen =
+        typeof options?.whenSec === "number"
+            ? options.whenSec
+            : audioContext.currentTime;
 
     midiNotes.forEach((midi, idx) => {
-        // Slight stagger for a realistic "strum" effect (20ms per string)
-        const stagger = idx * 0.02;
+        const stagger = idx * strum;
         // soundfont-player handles 'duration' by scheduling noteOff
-        guitar.play(midi, now + stagger, {
+        guitar.play(midi, baseWhen + stagger, {
             duration: duration,
             gain: gain,
         });
