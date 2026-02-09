@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(taskkill /F /PID 26324)",
+      "Bash(taskkill //F //PID 26324)",
+      "Bash(npm run dev)",
+      "Bash(tasklist)",
+      "Bash(findstr python)",
+      "Bash(netstat -ano)",
+      "Bash(findstr :8000)",
+      "Bash(.venvScriptspython.exe -m uvicorn main:app --reload)",
+      "Bash(.venv/Scripts/python.exe -m uvicorn main:app --reload)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

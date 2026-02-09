@@ -5,7 +5,9 @@ export interface Tab {
 export interface Bar {
     bar: number;
     chord: string;
-    tab: Tab;
+    tab: Tab | null;
+    start_sec: number;
+    end_sec: number;
 }
 
 export type AnalyzeMode = 'PREVIEW' | 'EARLY_ACCESS' | 'FULL';

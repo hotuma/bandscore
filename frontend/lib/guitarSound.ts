@@ -35,6 +35,31 @@ export function getGuitar(): Promise<GuitarInstrument | null> {
 }
 
 /**
+ * Initialize AudioContext without loading the guitar instrument.
+ * This is useful for timing/synchronization even when chord playback is disabled.
+ */
+export function initAudioContext(): AudioContext | null {
+    if (typeof window === "undefined") {
+        return null;
+    }
+
+    if (!audioContext) {
+        const AC = window.AudioContext || (window as any).webkitAudioContext;
+        audioContext = new AC();
+        console.log("[AudioContext] Initialized for synchronization");
+    }
+
+    // Resume if suspended (browser autoplay policy)
+    if (audioContext.state === "suspended") {
+        audioContext.resume().catch((e) => {
+            console.warn("[AudioContext] Resume failed:", e);
+        });
+    }
+
+    return audioContext;
+}
+
+/**
  * Get the current time from the shared AudioContext (if initialized).
  * Used for synchronizing external schedulers.
  */

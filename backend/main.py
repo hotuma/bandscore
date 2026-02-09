@@ -141,6 +141,68 @@ def chord_to_tab(chord: str) -> Optional[list[str]]:
     key = chord.strip()
     return CHORD_TO_TAB.get(key)
 
+# --- Timing Helpers ---
+
+from typing import Dict, Any, Optional, List, Tuple
+
+def _parse_time_signature(ts: str) -> Tuple[int, int]:
+    # "2/4" -> (2,4)
+    try:
+        if not ts: return 4, 4
+        a, b = ts.split("/")
+        num = int(a)
+        den = int(b)
+        if num <= 0 or den <= 0:
+            raise ValueError
+        return num, den
+    except Exception:
+        # fallback: assume 4/4
+        return 4, 4
+
+def add_bar_timing(
+    bars: List[Dict[str, Any]],
+    bpm: float | int | None,
+    time_signature: str | None,
+    analyzed_duration_sec: float | int | None,
+) -> List[Dict[str, Any]]:
+    n = len(bars)
+    if n == 0:
+        return bars
+
+    dur = float(analyzed_duration_sec) if analyzed_duration_sec is not None else None
+    # duration が無いなら、最後は n で均等割りに逃がす
+    if dur is not None and not math.isfinite(dur):
+        dur = None
+
+    # bpm が健全なら拍子から秒/小節を作る。ダメなら duration / n にフォールバック
+    bpm_f = float(bpm) if bpm is not None else None
+    if bpm_f is not None and (not math.isfinite(bpm_f) or bpm_f <= 0):
+        bpm_f = None
+
+    ts = time_signature or "4/4"
+    beats_per_bar, _ = _parse_time_signature(ts)
+
+    if bpm_f is not None:
+        sec_per_bar = (60.0 / bpm_f) * float(beats_per_bar)
+    else:
+        # bpm が無い/壊れている場合の最終手段
+        sec_per_bar = (dur / n) if (dur is not None and dur > 0) else 1.0
+
+    # 生成
+    for i, b in enumerate(bars):
+        start = i * sec_per_bar
+        end = (i + 1) * sec_per_bar
+        if dur is not None:
+            end = min(end, dur)
+        b["start_sec"] = float(start)
+        b["end_sec"] = float(end)
+
+    # 誤差吸収：duration があるなら最後はきっちり合わせる
+    if dur is not None and dur > 0:
+        bars[-1]["end_sec"] = float(dur)
+
+    return bars
+
 # --- Signal Processing ---
 
 def highpass_filter(y: np.ndarray, sr: int, cutoff_hz: float = 60.0) -> np.ndarray:
@@ -715,12 +777,11 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
         duration_sec = float(librosa.get_duration(y=y, sr=sr))
         print(f"[DEBUG] Audio duration: {duration_sec}s")
 
-        # 2. Beat tracking (Removed for speed/stability)
-        # Using fixed 0.5s segments (120 BPM)
-        bpm = 120.0
-        print(f"[DEBUG] Using fixed grid (BPM: {bpm})")
-        # _progress(35) # Skip beat track progress
-        beat_frames = [] # Unused
+        # 2. Beat tracking - Use librosa BPM detection
+        print("[DEBUG] Detecting BPM...")
+        tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, units='frames')
+        bpm = float(tempo)
+        print(f"[DEBUG] Detected BPM: {bpm:.1f}")
         _progress(35)
 
         # 3. Chroma
@@ -728,7 +789,7 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
         hop_length = 4096
         chroma = compute_chroma_log(y, sr, hop_length=hop_length)
         print(f"mem after chroma: {mem_mb():.1f} MB")
-        
+
         bass_chroma = chroma # compute_bass_chroma(y, sr, hop_length=hop_length)
         print(f"[DEBUG] Bass chroma disabled for memory stability")
         print(f"mem after bass chroma: {mem_mb():.1f} MB")
@@ -739,9 +800,23 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
             raise ValueError("Chroma extraction failed or audio too short")
 
         # 4. Time axes
-        # Fixed 0.5s intervals for 120 beats
-        beat_times = np.arange(0, duration_sec, 0.5)
+        # Improved: Use frame-based timing for more precise segment boundaries
         times = librosa.frames_to_time(np.arange(chroma.shape[1]), sr=sr, hop_length=hop_length)
+
+        # Calculate frame-aligned beat grid based on detected BPM
+        # 1 beat duration = 60 / BPM seconds
+        beat_duration = 60.0 / bpm
+        # Use 2 beats per segment (1 bar in 4/4 time = 2 beats for half-bar segments)
+        target_segment_duration = beat_duration * 2
+        frames_per_segment = int(target_segment_duration * sr / hop_length)
+
+        # Generate beat times based on actual frame boundaries for better alignment
+        num_segments = int(np.ceil(chroma.shape[1] / frames_per_segment))
+        beat_times = np.array([librosa.frames_to_time(i * frames_per_segment, sr=sr, hop_length=hop_length)
+                               for i in range(num_segments + 1)])
+
+        print(f"[DEBUG] BPM: {bpm:.1f}, Beat duration: {beat_duration:.3f}s, Segment duration: {target_segment_duration:.3f}s")
+        print(f"[DEBUG] Frame-based timing: {frames_per_segment} frames/segment, {num_segments} segments")
 
         # 5. Aggregate per segment
         print("[DEBUG] Aggregating segments...")
@@ -787,13 +862,33 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
                  progress_percent = 90 + 9 * ((i + 1) / len(smoothed_chords))
                  _progress(progress_percent)
 
+            # Retrieve precise segment timing
+            start_sec = 0.0
+            end_sec = 0.0
+            if i < len(segments):
+                start_sec, end_sec = segments[i]
+            else:
+                # Fallback implementation if alignment is off (though they should align)
+                # Typically implies end-of-stream edge case
+                # Estimate based on previous segment or fixed grid
+                if i > 0:
+                     prev_end = bars[-1]["end_sec"]
+                     avg_dur = (prev_end / i) if i > 0 else 2.0
+                     start_sec = prev_end
+                     end_sec = start_sec + avg_dur
+                else:
+                     start_sec = 0.0
+                     end_sec = 2.0 # Fallback
+
             tab = chord_to_tab(chord_name)
             bars.append({
                 "bar": i + 1,
                 "chord": chord_name,
                 "tab": {
                     "frets": tab
-                } if tab else None
+                } if tab else None,
+                "start_sec": float(start_sec),
+                "end_sec": float(end_sec)
             })
         
         print(f"[DEBUG] Analysis complete. Returning {len(bars)} bars.")
@@ -969,8 +1064,17 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
             offset += dur
             chunk_idx += 1
 
+
         # key matches first chunk
         key = key_votes[0] if key_votes else "Unknown"
+
+        # Force precise timing generation
+        all_bars = add_bar_timing(
+            all_bars,
+            bpm=bpm,
+            time_signature="2/4",
+            analyzed_duration_sec=offset
+        )
 
         final_result = {
             "bpm": bpm,

@@ -1,8 +1,7 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { AnalysisResult } from '../lib/api';
 import { setChordVolume } from '../lib/chordAudio';
-import { playChordFromTabWithSoundFont, getAudioContextTime } from '../lib/guitarSound';
-import { useMemo } from 'react';
+import { playChordFromTabWithSoundFont, getAudioContextTime, initAudioContext } from '../lib/guitarSound';
 // import { analysisResultToTimedChords } from '../lib/chordTimeline'; // unused
 
 
@@ -40,27 +39,6 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
         }
     }, [audioUrl]);
 
-    // Refs for auto-scrolling
-    const barRefs = useRef<(HTMLDivElement | null)[]>([]);
-    const lastPlayedBarRef = useRef<number>(-1);
-
-    // Scheduler refs
-    const schedulingBarRef = useRef<number>(0);      // Next bar to schedule
-    const schedulerTimerRef = useRef<number | null>(null);
-    const lastScheduledBarRef = useRef<number>(-1);  // Prevent double scheduling
-
-    const isPreview = result?.is_preview === true || result?.mode === 'PREVIEW';
-
-    // Format duration (seconds -> mm:ss)
-    const formatDuration = (seconds: number) => {
-        const min = Math.floor(seconds / 60);
-        const sec = Math.floor(seconds % 60);
-        return `${min}:${sec.toString().padStart(2, '0')}`;
-    };
-
-    // Safe bars access (renamed to safeBars to ensure no confusion/stale usage)
-    const safeBars = useMemo(() => result?.bars ?? [], [result]);
-
     // Track actual audio duration for accurate sync
     const [audioDurationSec, setAudioDurationSec] = useState<number>(0);
 
@@ -82,25 +60,171 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
         return () => audio.removeEventListener("loadedmetadata", onLoadedMeta);
     }, [audioUrl]);
 
-    // Calculate seconds per bar robustly (Total Duration / Number of Bars)
-    // This relies on the backend returning a fixed-grid "bars" array.
-    const secondsPerBar = useMemo(() => {
-        const n = safeBars.length;
-        if (!n) return 1;
+    // Refs for auto-scrolling
+    const barRefs = useRef<(HTMLDivElement | null)[]>([]);
+    const lastPlayedBarRef = useRef<number>(-1);
 
-        const audioDur = audioDurationSec;
-        // Preview uses analyzed duration (audio might be longer)
-        const analyzedDur = Number(result?.analyzed_duration_sec ?? 0);
-        const fallbackDur = Number(result?.duration_sec ?? 0);
-        const analysisDur = (Number.isFinite(analyzedDur) && analyzedDur > 0) ? analyzedDur : fallbackDur;
+    // Scheduler refs
+    const schedulingBarRef = useRef<number>(0);      // Next bar to schedule
+    const schedulerTimerRef = useRef<number | null>(null);
+    const lastScheduledBarRef = useRef<number>(-1);  // Prevent double scheduling
 
-        const dur = isPreview
-            ? analysisDur
-            : ((Number.isFinite(audioDur) && audioDur > 0) ? audioDur : analysisDur);
+    // --- Anchor & Scheduler State ---
+    const anchorRef = useRef<{ audio: number; ctx: number } | null>(null);
+    const scheduledUpToRef = useRef<number>(-1); // Ensure we never schedule the same index twice per seek
 
-        if (!dur) return 1;
-        return dur / n;
-    }, [safeBars.length, result?.duration_sec, result?.analyzed_duration_sec, audioDurationSec, isPreview]);
+    const resetAnchor = () => {
+        const audio = audioRef.current;
+        if (!audio) {
+            console.warn("[Anchor] Reset failed: No audio element");
+            return;
+        }
+        const ctxNow = getAudioContextTime();
+        if (ctxNow == null) {
+            console.warn("[Anchor] Reset failed: AudioContext not available");
+            return;
+        }
+
+        anchorRef.current = { audio: audio.currentTime, ctx: ctxNow };
+        console.log("[Anchor] Reset success:", {
+            audioTime: anchorRef.current.audio.toFixed(3),
+            ctxTime: anchorRef.current.ctx.toFixed(3),
+            isPaused: audio.paused
+        });
+    };
+
+    const getCtxTimeForAudioTime = (targetAudioTime: number): number | null => {
+        const a = anchorRef.current;
+        if (!a) {
+            // Fallback: dangerous but better than crash
+            const ctxNow = getAudioContextTime();
+            if (ctxNow === null) return null;
+            return ctxNow + (targetAudioTime - (audioRef.current?.currentTime ?? 0));
+        }
+        return a.ctx + (targetAudioTime - a.audio);
+    };
+
+    const isPreview = result?.is_preview === true || result?.mode === 'PREVIEW';
+
+    // Format duration (seconds -> mm:ss)
+    const formatDuration = (seconds: number) => {
+        const min = Math.floor(seconds / 60);
+        const sec = Math.floor(seconds % 60);
+        return `${min}:${sec.toString().padStart(2, '0')}`;
+    };
+
+    // Safe bars access (renamed to safeBars to ensure no confusion/stale usage)
+    const rawSafeBars = useMemo(() => {
+        const bars = result?.bars ?? [];
+        return bars.map((b: any, i: number) => {
+            const rawStart = b.start_sec;
+            const rawEnd = b.end_sec;
+            const start = Number(rawStart);
+            const end = Number(rawEnd);
+            const bad = !(Number.isFinite(start) && Number.isFinite(end) && end >= start);
+            return {
+                ...b,
+                start_sec: start,
+                end_sec: end,
+                __i: i,
+                __bad: bad,
+                __rawStart: rawStart,
+                __rawEnd: rawEnd
+            };
+        });
+    }, [result]);
+
+    // Diagnostic logging
+    useEffect(() => {
+        const total = rawSafeBars.length;
+        const badCount = rawSafeBars.filter(b => (b as any).__bad).length;
+        const badRate = total ? badCount / total : 0;
+
+        const badSamples = rawSafeBars.filter(b => (b as any).__bad).slice(0, 5);
+        if (badSamples.length > 0) {
+            console.warn(`[bars] total=${total} bad=${badCount} rate=${badRate.toFixed(3)}`,
+                badSamples.map(b => ({ i: (b as any).__i, rawS: (b as any).__rawStart, rawE: (b as any).__rawEnd }))
+            );
+        }
+    }, [rawSafeBars]);
+
+    // Fallback/Repair logic
+    const safeBars = useMemo(() => {
+        const total = rawSafeBars.length;
+        const badCount = rawSafeBars.filter(b => (b as any).__bad).length;
+        const badRate = total ? badCount / total : 0;
+
+        // Use original bars if data is mostly good
+        if (badRate < 0.3) return rawSafeBars;
+
+        const dur = Number(audioDurationSec || result?.duration_sec || 0); // Use reliable total duration
+        if (!Number.isFinite(dur) || dur <= 0 || total === 0) return rawSafeBars; // Can't fallback without duration
+
+        const step = dur / total;
+        console.warn("[bars] Fallback timing enabled (avg distribution)", { dur, total, step });
+
+        return rawSafeBars.map((b, i) => ({
+            ...b,
+            start_sec: i * step,
+            end_sec: (i + 1) * step,
+            __bad: false // Mark as good since we repaired it
+        }));
+    }, [rawSafeBars, audioDurationSec, result?.duration_sec]);
+
+
+
+    // --- Precise Bar Timing Utilities ---
+    // Efficiently find current bar using binary search on start_sec/end_sec
+    const findBarIndexByTime = (t: number, bars: any[]): number => {
+        if (!bars || bars.length === 0) return -1;
+        if (!Number.isFinite(t)) return -1;
+
+        // 壊れた bar があると二分探索が壊れるので、まず端の健全性を確認
+        const firstS = Number(bars[0]?.start_sec);
+        const lastE = Number(bars[bars.length - 1]?.end_sec);
+        if (!Number.isFinite(firstS) || !Number.isFinite(lastE)) {
+            // フォールバック（遅いが確実）
+            for (let i = 0; i < bars.length; i++) {
+                const s = Number(bars[i]?.start_sec);
+                const e = Number(bars[i]?.end_sec);
+                if (Number.isFinite(s) && Number.isFinite(e) && t >= s && t < e) return i;
+            }
+            return -1;
+        }
+
+        if (t < firstS) return -1;
+        if (t >= lastE) return bars.length - 1;
+
+        let lo = 0, hi = bars.length - 1;
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            const s = Number(bars[mid]?.start_sec);
+            const e = Number(bars[mid]?.end_sec);
+
+            // midが壊れてたら近傍探索に切替
+            if (!Number.isFinite(s) || !Number.isFinite(e)) {
+                // 近傍線形
+                for (let j = Math.max(0, mid - 8); j <= Math.min(bars.length - 1, mid + 8); j++) {
+                    const sj = Number(bars[j]?.start_sec);
+                    const ej = Number(bars[j]?.end_sec);
+                    if (Number.isFinite(sj) && Number.isFinite(ej) && t >= sj && t < ej) return j;
+                }
+                return -1;
+            }
+
+            if (t < s) {
+                hi = mid - 1;
+            } else if (t >= e) {
+                lo = mid + 1;
+            } else {
+                return mid;
+            }
+        }
+        return Math.min(bars.length - 1, Math.max(-1, hi));
+    };
+
+    // Note: secondsPerBar is no longer used for synchronization, 
+    // but kept conceptually if we needed an average (not needed here).
 
 
     // --- Audio Event Listeners (State Management Only) ---
@@ -109,41 +233,70 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
         if (!audio) return;
 
         const onPlay = () => {
+            console.log("[Play] Event fired at audio time:", audio.currentTime.toFixed(3));
             setIsPlaying(true);
-            lastPlayedBarRef.current = -1; // Reset immediate trigger (legacy/safety)
+            lastPlayedBarRef.current = -1;
 
-            // Reset scheduling so the next bar is scheduled correctly
-            const audio = audioRef.current;
+            // AudioContextを確実に初期化（ハイライト同期のため必須）
+            initAudioContext();
+
+            // Anchor Reset on Play - 確実に初期化
+            resetAnchor();
+
+            // Allow scheduling to resume
             if (audio) {
-                const t = audio.currentTime;
-                const current = t > 0 ? Math.floor(t / secondsPerBar) : 0;
+                const t = audio.currentTime - offsetSec; // Use Analysis Time
+                // Reuse findBarIndex logic
+                const current = findBarIndexByTime(t, safeBars);
                 schedulingBarRef.current = Math.min(safeBars.length - 1, Math.max(0, current));
-            } else {
-                schedulingBarRef.current = 0;
+                scheduledUpToRef.current = schedulingBarRef.current - 1; // Mark previous as done
+                console.log("[Play] Scheduler initialized at bar index:", schedulingBarRef.current);
             }
-            lastScheduledBarRef.current = -1;
         };
         const onPause = () => setIsPlaying(false);
         const onEnded = () => {
             setIsPlaying(false);
             setCurrentBarIndex(-1);
+            anchorRef.current = null; // Clear anchor on stop
+        };
+
+        const onSeeked = () => {
+            console.log("[Seeked] Event fired at audio time:", audio.currentTime.toFixed(3));
+
+            // AudioContextを確実に初期化（シーク後も同期を維持）
+            initAudioContext();
+
+            // Reset Anchor & Scheduler on Seek!
+            resetAnchor();
+
+            const t = audio.currentTime - offsetSec; // Use Analysis Time
+            const current = findBarIndexByTime(t, safeBars);
+            schedulingBarRef.current = Math.min(safeBars.length - 1, Math.max(0, current));
+            scheduledUpToRef.current = schedulingBarRef.current - 1;
+
+            lastPlayedBarRef.current = -1;
+            lastScheduledBarRef.current = -1;
+            console.log("[Seeked] Scheduler reset to bar index:", schedulingBarRef.current);
         };
 
         audio.addEventListener('play', onPlay);
         audio.addEventListener('pause', onPause);
         audio.addEventListener('ended', onEnded);
+        audio.addEventListener('seeked', onSeeked);
 
         // Initial state check
         if (!audio.paused && !audio.ended) {
             setIsPlaying(true);
+            resetAnchor(); // Ensure anchor if hot-reloaded while playing
         }
 
         return () => {
             audio.removeEventListener('play', onPlay);
             audio.removeEventListener('pause', onPause);
             audio.removeEventListener('ended', onEnded);
+            audio.removeEventListener('seeked', onSeeked);
         };
-    }, [audioUrl]); // Re-bind if audio source changes
+    }, [audioUrl, safeBars, offsetSec]); // Re-bind if audio source or data changes
 
     // Preview: Stop playback if it exceeds analyzed range to prevent sync drift or errors
     useEffect(() => {
@@ -179,28 +332,8 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
         };
     }, [isPreview, result?.analyzed_duration_sec, result?.duration_sec, safeBars.length]);
 
-    // Ensure AutoChord re-triggers after seek
-    useEffect(() => {
-        const audio = audioRef.current;
-        if (!audio) return;
-
-        const onSeeked = () => {
-            lastPlayedBarRef.current = -1;
-
-            // Reset scheduling after seek so chords re-lock immediately
-            const audio = audioRef.current;
-            if (audio) {
-                const t = audio.currentTime;
-                const current = t > 0 ? Math.floor(t / secondsPerBar) : 0;
-                schedulingBarRef.current = Math.min(safeBars.length - 1, Math.max(0, current));
-            } else {
-                schedulingBarRef.current = 0;
-            }
-            lastScheduledBarRef.current = -1;
-        };
-        audio.addEventListener('seeked', onSeeked);
-        return () => audio.removeEventListener('seeked', onSeeked);
-    }, [audioUrl, safeBars.length, secondsPerBar]);
+    // Removed separate AutoChord seek listener as it is now combined above
+    // (This block was previously lines 272-293)
 
     // --- Main Sync Loop (The "King" RAF) ---
     useEffect(() => {
@@ -220,10 +353,11 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
             if (!frets) return;
 
             // Sustain control: Play for the duration of the bar (sustainSec)
-            const sustainSec = Math.min(
-                1.8,                         // Upper limit (prevent too long sustain)
-                Math.max(0.25, secondsPerBar * 0.95) // Lower limit (prevent staccato), 0.95 for legato
-            );
+            const dur = Number(bar.end_sec) - Number(bar.start_sec);
+            const raw = dur * 0.95;
+            const sustainSec = Number.isFinite(raw)
+                ? Math.min(1.8, Math.max(0.25, raw))
+                : 0.8; // fallback
 
             playChordFromTabWithSoundFont(frets, {
                 durationSec: sustainSec,
@@ -235,52 +369,46 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
 
         const loop = () => {
             try {
-                if (audioRef.current) {
-                    const currentTime = audioRef.current.currentTime;
-
-                    // 1. Audio Playback Index (Raw time, no offset) - strict audio sync
-                    let playIndex = -1;
-                    if (currentTime > 0) {
-                        playIndex = Math.floor(currentTime / secondsPerBar);
-                    }
-                    // Clamp playIndex
-                    if (safeBars.length === 0) {
-                        playIndex = -1;
-                    } else if (playIndex >= safeBars.length) {
-                        playIndex = safeBars.length - 1;
+                if (audioRef.current && !audioRef.current.paused) {
+                    // Anchorが無い場合は初期化を試みる
+                    if (!anchorRef.current) {
+                        resetAnchor();
                     }
 
-                    // 2. Visual UI Index (Offset adjusted) - aligns chord highlight with audio perception
+                    let currentTime: number;
+
+                    // AudioContextベースの高精度時刻を使用
+                    const ctxNow = getAudioContextTime();
+                    if (ctxNow !== null && anchorRef.current) {
+                        // Anchorを使って高精度なAudio時刻を計算
+                        currentTime = anchorRef.current.audio + (ctxNow - anchorRef.current.ctx);
+                    } else {
+                        // フォールバック: AudioContextが利用不可の場合のみHTMLAudioElementを使用
+                        currentTime = audioRef.current.currentTime;
+                    }
+
+                    // Visual UI Index (Offset adjusted) - aligns chord highlight with audio perception
                     // offsetSec is typically positive latency compensation
                     const effectiveTime = currentTime - offsetSec;
-                    let uiIndex = -1;
-                    if (effectiveTime > 0) {
-                        uiIndex = Math.floor(effectiveTime / secondsPerBar);
-                    }
-                    // Clamp uiIndex
-                    if (safeBars.length === 0) {
-                        uiIndex = -1;
-                    } else if (uiIndex >= safeBars.length) {
-                        uiIndex = safeBars.length - 1;
-                    }
 
-                    // --- AutoChord trigger using playIndex (Sound) ---
-                    // IMMEDIATE TRIGGER REMOVED in favor of Lookahead Scheduler
-                    // kept only for reference if we need to rollback
-                    /*
-                    if (
-                        autoChord &&
-                        playIndex >= 0 &&
-                        playIndex !== lastPlayedBarRef.current
-                    ) {
-                        lastPlayedBarRef.current = playIndex;
-                        playBarChord(playIndex);
-                    }
-                    */
+                    const uiIndex = findBarIndexByTime(effectiveTime, safeBars);
 
                     // --- Update UI using uiIndex (Visuals) ---
                     setCurrentBarIndex(prev => {
-                        if (prev !== uiIndex) return uiIndex;
+                        if (prev !== uiIndex) {
+                            // デバッグログ: ハイライト切り替え時のタイミング情報
+                            const bar = safeBars[uiIndex];
+                            console.log("[RAF Highlight]", {
+                                currentTime: currentTime.toFixed(3),
+                                effectiveTime: effectiveTime.toFixed(3),
+                                offsetSec: offsetSec.toFixed(3),
+                                barIndex: uiIndex,
+                                barStart: bar?.start_sec?.toFixed(3) ?? "N/A",
+                                barEnd: bar?.end_sec?.toFixed(3) ?? "N/A",
+                                chord: bar?.chord ?? "N/A"
+                            });
+                            return uiIndex;
+                        }
                         return prev;
                     });
                 }
@@ -298,93 +426,127 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                 rafIdRef.current = null;
             }
         };
-    }, [isPlaying, offsetSec, secondsPerBar, safeBars, autoChord, chordVolume]);
+    }, [isPlaying, safeBars]);
 
     // --- Lookahead Scheduler (The "Future" Sync) ---
+    // SINGLETON PATTERN: Only one interval running ever
     useEffect(() => {
-        // Stop scheduler if not playing or AutoChord off
-        if (!isPlaying || !autoChord) {
-            if (schedulerTimerRef.current != null) {
-                window.clearInterval(schedulerTimerRef.current);
-                schedulerTimerRef.current = null;
-            }
-            return;
-        }
-
         const audio = audioRef.current;
         if (!audio) return;
 
-        const LOOKAHEAD_SEC = 0.15; // 150ms window
-        const TICK_MS = 25;
+        console.log("[Scheduler] Effect mounted");
 
-        const tick = () => {
-            try {
-                if (!audioRef.current) return;
-                const a = audioRef.current;
-                if (a.paused) return;
-
-                const ctxNow = getAudioContextTime();
-                if (ctxNow == null) return;
-
-                const tAudio = a.currentTime;
-
-                // Initialize schedulingBarRef if needed (safety fallback)
-                if (schedulingBarRef.current < 0 || schedulingBarRef.current >= safeBars.length) {
-                    const cur = tAudio > 0 ? Math.floor(tAudio / secondsPerBar) : 0;
-                    schedulingBarRef.current = Math.min(safeBars.length - 1, Math.max(0, cur));
-                    lastScheduledBarRef.current = -1;
-                }
-
-                // Schedule as many bars as fall inside the lookahead window
-                while (schedulingBarRef.current < safeBars.length) {
-                    const barIndex = schedulingBarRef.current;
-
-                    // Target bar start time (audio clock)
-                    const barStartAudio = barIndex * secondsPerBar;
-
-                    const delta = barStartAudio - tAudio; // seconds until this bar start in audio time
-                    if (delta > LOOKAHEAD_SEC) break;     // too far in the future
-                    if (delta < -0.05) {                  // already passed; skip forward
-                        schedulingBarRef.current += 1;
-                        continue;
-                    }
-
-                    if (barIndex !== lastScheduledBarRef.current) {
-                        // Bridge clocks: when does this happen in AudioContext time?
-                        // whenSec = now(Ctx) + delta
-                        const whenSec = ctxNow + Math.max(0, delta);
-
-                        const bar = safeBars[barIndex];
-                        const frets = bar?.tab?.frets;
-                        if (frets) {
-                            const sustainSec = Math.min(1.8, Math.max(0.25, secondsPerBar * 0.95));
-                            playChordFromTabWithSoundFont(frets, {
-                                durationSec: sustainSec,
-                                gain: chordVolume,
-                                whenSec,
-                                strumSec: 0.015, // tighter strum for scheduled playback
-                            }).catch(console.error);
-                        }
-
-                        lastScheduledBarRef.current = barIndex;
-                    }
-
-                    schedulingBarRef.current += 1;
-                }
-            } catch (e) {
-                console.error("Scheduler tick error:", e);
-            }
+        const startScheduler = () => {
+            if (schedulerTimerRef.current !== null) return;
+            console.log("[Scheduler] Start");
+            schedulerTimerRef.current = window.setInterval(tick, 16); // 60 FPS for better precision
         };
 
-        schedulerTimerRef.current = window.setInterval(tick, TICK_MS);
-
-        return () => {
-            if (schedulerTimerRef.current != null) {
+        const stopScheduler = () => {
+            if (schedulerTimerRef.current !== null) {
+                console.log("[Scheduler] Stop", schedulerTimerRef.current);
                 window.clearInterval(schedulerTimerRef.current);
                 schedulerTimerRef.current = null;
             }
         };
-    }, [isPlaying, autoChord, secondsPerBar, safeBars, chordVolume]);
+
+        const tick = () => {
+            // Safety check: if user turned off autoChord or is paused, do nothing (or break loop)
+            // accessing state inside interval requires refs to be up to date or using SetState callback,
+            // but here we use Refs for audio/queue, so we just need minimal props.
+            // Note: `isPlaying` state might be stale if closure is old, so we check audio.paused directly.
+
+            if (!audioRef.current || audioRef.current.paused) return;
+            if (!autoChord) return; // Note: if autoChord changes, this effect re-runs because of dependency below.
+
+            console.count("tick");
+
+            // ANCHOR SYNC CHECK
+            if (!anchorRef.current) {
+                resetAnchor(); // Lazy init if missing
+                if (!anchorRef.current) return; // Still failed (no CTX?)
+            }
+
+            // Sync Logic
+            const LOOKAHEAD_SEC = 0.2; // Increased for better scheduling reliability
+            const ctxNow = getAudioContextTime();
+            if (ctxNow == null) return;
+
+            // Use ANCHOR to get stable Audio Time "as of Now(Ctx)"
+            const tBrowser = anchorRef.current.audio + (ctxNow - anchorRef.current.ctx);
+            // Convert to Analysis Time for scheduling checks
+            const tAnalysis = tBrowser - offsetSec;
+
+            // Re-sync scheduling pointer if it fell behind too much (e.g. big lag spike)
+            if (schedulingBarRef.current < 0 || schedulingBarRef.current >= safeBars.length) {
+                const cur = findBarIndexByTime(tAnalysis, safeBars);
+                schedulingBarRef.current = Math.min(safeBars.length - 1, Math.max(0, cur));
+                scheduledUpToRef.current = schedulingBarRef.current - 1;
+            }
+
+            while (schedulingBarRef.current < safeBars.length) {
+                const barIndex = schedulingBarRef.current;
+
+                // DOUBLE-PLAY GUARD
+                if (barIndex <= scheduledUpToRef.current) {
+                    schedulingBarRef.current++;
+                    continue;
+                }
+
+                const bar = safeBars[barIndex];
+                if (!bar) break;
+
+                const barStartAudio = Number(bar.start_sec);
+                const barEndAudio = Number(bar.end_sec);
+
+                // SKIP BAD BARS
+                if (!Number.isFinite(barStartAudio) || !Number.isFinite(barEndAudio) || barEndAudio < barStartAudio) {
+                    scheduledUpToRef.current = barIndex; // Mark as handled
+                    schedulingBarRef.current++;
+                    continue;
+                }
+
+                const delta = barStartAudio - tAnalysis; // Use Analysis Time for delta
+
+                if (delta > LOOKAHEAD_SEC) break; // Too far ahead
+
+                if (delta < -0.1) {
+                    // Completely late (over 100ms behind) - skip
+                    scheduledUpToRef.current = barIndex;
+                    schedulingBarRef.current++;
+                    continue;
+                }
+
+                // Schedule it!
+                // If slightly late (-0.1 ~ 0), schedule immediately at ctxNow
+                // If early (0 ~ LOOKAHEAD_SEC), schedule at the correct future time
+                const whenSec = Math.max(ctxNow, ctxNow + delta);
+
+                const frets = bar?.tab?.frets;
+                if (frets) {
+                    const sustainSec = Math.min(1.8, Math.max(0.25, (barEndAudio - barStartAudio) * 0.95));
+                    playChordFromTabWithSoundFont(frets, {
+                        durationSec: sustainSec,
+                        gain: chordVolume,
+                        whenSec,
+                        strumSec: 0.012, // Reduced for tighter synchronization
+                    }).then(() => {
+                        // Success
+                    }).catch(console.error);
+                }
+
+                scheduledUpToRef.current = barIndex; // MARK DONE
+                lastScheduledBarRef.current = barIndex;
+                schedulingBarRef.current++;
+            }
+        };
+
+        startScheduler();
+
+        return () => {
+            stopScheduler();
+        };
+    }, [autoChord, safeBars, chordVolume]); // Removed isPlaying to avoid churn, logic checks audio.paused directly
 
     // Auto-scroll effect
     useEffect(() => {
@@ -439,11 +601,30 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
         }
 
         if (audioRef.current) {
-            // Adjust seek time by subtracting offset so effective time matches bar start
-            // Adjust seek time by subtracting offset so effective time matches bar start
-            const targetTime = (barIndex * secondsPerBar) - offsetSec;
-            audioRef.current.currentTime = Math.max(0, targetTime);
-            lastPlayedBarRef.current = -1; // ensure chord triggers after manual seek
+            const start = Number((bar as any).start_sec);
+            if (!Number.isFinite(start)) {
+                console.warn("[handleBarClick] invalid bar.start_sec:", bar);
+                return;
+            }
+            // Start (Analysis Time) -> Target (Browser Time)
+            // Rule: analysis = browser - offset  =>  browser = analysis + offset
+            const targetBrowserTime = Math.max(0, start + offsetSec);
+
+            // duration を超えると例外/挙動不安定の原因になるのでクランプ
+            const dur = Number(audioRef.current.duration);
+            const clamped =
+                Number.isFinite(dur) && dur > 0 ? Math.min(Math.max(0, targetBrowserTime), Math.max(0, dur - 0.001)) : targetBrowserTime;
+
+            audioRef.current.currentTime = clamped;
+            lastPlayedBarRef.current = -1;
+
+            // Sync internal state immediately
+            resetAnchor();
+
+            // Explicitly set scheduling to the clicked bar
+            schedulingBarRef.current = barIndex;
+            scheduledUpToRef.current = barIndex - 1;
+
             audioRef.current.play();
         }
     };
@@ -663,7 +844,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                         <span className="text-blue-400">{currentBarIndex}</span>
 
                         <span className="text-gray-400">Sec/Bar:</span>
-                        <span>{secondsPerBar.toFixed(3)}s</span>
+                        <span>N/A</span>
 
                         <span className="text-gray-400">Offset:</span>
                         <span className="text-yellow-400">{offsetSec.toFixed(2)}s</span>
