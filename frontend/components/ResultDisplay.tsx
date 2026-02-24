@@ -171,7 +171,23 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
         }));
     }, [rawSafeBars, audioDurationSec, result?.duration_sec]);
 
-
+    // --- Diagnostic: バーのタイミング情報をコンソールに出力 ---
+    useEffect(() => {
+        if (safeBars.length > 0) {
+            const first = Number(safeBars[0].start_sec);
+            const barDur = safeBars.length > 1
+                ? Number(safeBars[1].start_sec) - first
+                : Number(safeBars[0].end_sec) - first;
+            console.log("[Bars] Timing dump:", {
+                totalBars: safeBars.length,
+                barDuration: barDur.toFixed(3),
+                firstBarStart: first.toFixed(3),
+                lastBarEnd: Number(safeBars[safeBars.length - 1].end_sec).toFixed(3),
+                bpm: result?.bpm ?? "N/A",
+                _build: (result as any)?._build ?? "MISSING",
+            });
+        }
+    }, [safeBars, result?.bpm]);
 
     // --- Precise Bar Timing Utilities ---
     // Efficiently find current bar using binary search on start_sec/end_sec
@@ -382,6 +398,14 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                     if (ctxNow !== null && anchorRef.current) {
                         // Anchorを使って高精度なAudio時刻を計算
                         currentTime = anchorRef.current.audio + (ctxNow - anchorRef.current.ctx);
+
+                        // Drift correction: AudioContext と HTMLAudioElement のクロック乖離を補正
+                        const audioRealTime = audioRef.current.currentTime;
+                        const drift = currentTime - audioRealTime;
+                        if (Math.abs(drift) > 0.03) {
+                            anchorRef.current = { audio: audioRealTime, ctx: ctxNow };
+                            currentTime = audioRealTime;
+                        }
                     } else {
                         // フォールバック: AudioContextが利用不可の場合のみHTMLAudioElementを使用
                         currentTime = audioRef.current.currentTime;
@@ -398,14 +422,17 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                         if (prev !== uiIndex) {
                             // デバッグログ: ハイライト切り替え時のタイミング情報
                             const bar = safeBars[uiIndex];
+                            const barStart = Number(bar?.start_sec ?? 0);
+                            const lag = effectiveTime - barStart;
                             console.log("[RAF Highlight]", {
                                 currentTime: currentTime.toFixed(3),
                                 effectiveTime: effectiveTime.toFixed(3),
                                 offsetSec: offsetSec.toFixed(3),
                                 barIndex: uiIndex,
-                                barStart: bar?.start_sec?.toFixed(3) ?? "N/A",
+                                barStart: barStart.toFixed(3),
                                 barEnd: bar?.end_sec?.toFixed(3) ?? "N/A",
-                                chord: bar?.chord ?? "N/A"
+                                chord: bar?.chord ?? "N/A",
+                                lag: lag.toFixed(3)
                             });
                             return uiIndex;
                         }
@@ -473,7 +500,15 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
             if (ctxNow == null) return;
 
             // Use ANCHOR to get stable Audio Time "as of Now(Ctx)"
-            const tBrowser = anchorRef.current.audio + (ctxNow - anchorRef.current.ctx);
+            let tBrowser = anchorRef.current.audio + (ctxNow - anchorRef.current.ctx);
+
+            // Drift correction: AudioContext と HTMLAudioElement のクロック乖離を補正
+            const audioRealTime = audioRef.current?.currentTime ?? tBrowser;
+            const drift = tBrowser - audioRealTime;
+            if (Math.abs(drift) > 0.03) {
+                anchorRef.current = { audio: audioRealTime, ctx: ctxNow };
+                tBrowser = audioRealTime;
+            }
             // Convert to Analysis Time for scheduling checks
             const tAnalysis = tBrowser - offsetSec;
 

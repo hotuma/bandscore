@@ -743,7 +743,7 @@ def download_youtube_audio(url: str, cookie_path: str | None = None) -> str:
                 )
             raise e
 
-def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float = 0.0, duration_limit_sec: float | None = None) -> dict:
+def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float = 0.0, duration_limit_sec: float | None = None, forced_bpm: float | None = None) -> dict:
     """Core analysis logic reusable for both uploads and URLs."""
     
     def _progress(p: float):
@@ -777,11 +777,156 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
         duration_sec = float(librosa.get_duration(y=y, sr=sr))
         print(f"[DEBUG] Audio duration: {duration_sec}s")
 
-        # 2. Beat tracking - Use librosa BPM detection
-        print("[DEBUG] Detecting BPM...")
-        tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, units='frames')
-        bpm = float(tempo)
-        print(f"[DEBUG] Detected BPM: {bpm:.1f}")
+        # 2. Beat tracking
+        # オンセット検出（BPM検出・位相検出の両方で使用）
+        onset_env = librosa.onset.onset_strength(y=y, sr=sr)
+        onset_frames_detected = librosa.onset.onset_detect(
+            onset_envelope=onset_env, sr=sr, units='frames'
+        )
+        onset_set = set(onset_frames_detected.tolist())
+        total_frames = len(onset_env)
+        num_onsets = len(onset_frames_detected)
+        print(f"[DEBUG] Detected {num_onsets} onsets in {total_frames} frames")
+
+        if forced_bpm is not None:
+            bpm = forced_bpm
+            beat_frames = []
+            print(f"[DEBUG] Using forced BPM: {bpm:.1f}")
+        else:
+            print("[DEBUG] Detecting BPM...")
+
+            # BPM 60-240を1刻みでスキャンし、F1スコアが最大のBPMを選択
+            best_bpm = 120.0
+            best_score = -1.0
+            tolerance = 3
+            top_candidates = []
+
+            for c in range(60, 241):
+                beat_period = 60.0 * sr / (c * 512)
+                grid = np.arange(0, total_frames, beat_period)
+                if len(grid) == 0:
+                    continue
+
+                # Precision: ビートのうちオンセットが近くにある割合
+                hits = 0
+                for g in grid:
+                    g_int = int(round(g))
+                    for t in range(-tolerance, tolerance + 1):
+                        if (g_int + t) in onset_set:
+                            hits += 1
+                            break
+                precision = hits / len(grid)
+
+                # Recall: オンセットのうちビートが近くにある割合
+                grid_set = set()
+                for g in grid:
+                    g_int = int(round(g))
+                    for t in range(-tolerance, tolerance + 1):
+                        grid_set.add(g_int + t)
+                onset_hits = sum(1 for o in onset_frames_detected if int(o) in grid_set)
+                recall = onset_hits / max(1, num_onsets)
+
+                # F1スコア
+                if precision + recall > 0:
+                    score = 2 * precision * recall / (precision + recall)
+                else:
+                    score = 0.0
+
+                top_candidates.append((c, score, precision, recall))
+                if score > best_score:
+                    best_score = score
+                    best_bpm = float(c)
+
+            # 上位5候補をログ出力
+            top_candidates.sort(key=lambda x: x[1], reverse=True)
+            for c, s, p, r in top_candidates[:5]:
+                print(f"[DEBUG] BPM candidate: {c} (P={p:.3f} R={r:.3f} F1={s:.3f})")
+
+            # Stage 2: 自己相関ベースのBPMリファインメント
+            coarse_bpm = best_bpm
+            coarse_f1 = best_score
+
+            # 高解像度オンセットエンベロープで自己相関を計算（hop=128で4倍精密）
+            hop_ac = 128
+            onset_env_fine = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop_ac)
+            ac = librosa.autocorrelate(onset_env_fine)
+            if ac[0] > 0:
+                ac = ac / ac[0]
+
+            # 粗BPMを期待ラグに変換
+            expected_lag = 60.0 * sr / (coarse_bpm * hop_ac)
+            expected_lag_int = int(round(expected_lag))
+
+            # 期待ラグの±5%範囲で自己相関ピークを探索
+            search_radius = max(3, int(expected_lag * 0.05))
+            search_lo = max(1, expected_lag_int - search_radius)
+            search_hi = min(len(ac) - 2, expected_lag_int + search_radius)
+
+            if search_hi > search_lo:
+                peak_idx = search_lo + int(np.argmax(ac[search_lo:search_hi + 1]))
+
+                # 放物線補間でサブフレーム精度を得る
+                if 0 < peak_idx < len(ac) - 1:
+                    alpha = float(ac[peak_idx - 1])
+                    beta = float(ac[peak_idx])
+                    gamma = float(ac[peak_idx + 1])
+                    denom = alpha - 2.0 * beta + gamma
+                    delta = 0.5 * (alpha - gamma) / denom if abs(denom) > 1e-10 else 0.0
+                    refined_lag = peak_idx + delta
+                else:
+                    refined_lag = float(peak_idx)
+
+                refined_bpm = 60.0 * sr / (refined_lag * hop_ac) if refined_lag > 0 else coarse_bpm
+
+                # サニティチェック
+                ac_confidence = float(ac[peak_idx])
+                if abs(refined_bpm - coarse_bpm) > 5.0:
+                    # 粗BPMから離れすぎ → 棄却
+                    bpm = coarse_bpm
+                    print(f"[DEBUG] AC peak too far ({refined_bpm:.1f}), keeping coarse {coarse_bpm:.0f}")
+                elif abs(refined_bpm - coarse_bpm) < 1.0:
+                    # 1BPM未満の差 → 粗BPM（整数）を維持
+                    bpm = coarse_bpm
+                    print(f"[DEBUG] AC refined={refined_bpm:.1f} (delta<1), keeping coarse {coarse_bpm:.0f} "
+                          f"(lag={refined_lag:.2f}, ac={ac_confidence:.3f})")
+                else:
+                    # 1-5 BPMの差 → ACリファイン結果を採用
+                    bpm = round(refined_bpm, 1)
+                    print(f"[DEBUG] BPM refined via autocorrelation: {coarse_bpm:.0f} -> {bpm:.1f} "
+                          f"(lag={refined_lag:.2f}, ac={ac_confidence:.3f}, coarse_F1={coarse_f1:.3f})")
+            else:
+                bpm = coarse_bpm
+                print(f"[DEBUG] Audio too short for AC refinement, keeping coarse BPM: {coarse_bpm:.0f}")
+
+            del onset_env_fine, ac
+            beat_frames = []
+
+        # Stage 3: ビート位相検出 - 最適なグリッド開始位置を探索
+        beat_period_onset = 60.0 * sr / (bpm * 512)
+        best_phase = 0.0
+        best_phase_score = -1.0
+        phase_tolerance = 3
+
+        for phase_10x in range(0, int(beat_period_onset * 10)):
+            phase = phase_10x / 10.0
+            grid = np.arange(phase, total_frames, beat_period_onset)
+            if len(grid) == 0:
+                continue
+            hits = 0
+            for g in grid:
+                g_int = int(round(g))
+                for t in range(-phase_tolerance, phase_tolerance + 1):
+                    if (g_int + t) in onset_set:
+                        hits += 1
+                        break
+            precision = hits / len(grid)
+            if precision > best_phase_score:
+                best_phase_score = precision
+                best_phase = phase
+
+        phase_offset_sec = best_phase * 512 / sr
+        print(f"[DEBUG] Beat phase offset: {phase_offset_sec*1000:.1f}ms (precision={best_phase_score:.4f})")
+        del onset_env, onset_set
         _progress(35)
 
         # 3. Chroma
@@ -810,10 +955,10 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
         target_segment_duration = beat_duration * 2
         frames_per_segment = int(target_segment_duration * sr / hop_length)
 
-        # Generate beat times based on actual frame boundaries for better alignment
-        num_segments = int(np.ceil(chroma.shape[1] / frames_per_segment))
-        beat_times = np.array([librosa.frames_to_time(i * frames_per_segment, sr=sr, hop_length=hop_length)
-                               for i in range(num_segments + 1)])
+        # Generate beat times with phase offset for bar alignment
+        total_duration = librosa.frames_to_time(chroma.shape[1], sr=sr, hop_length=hop_length)
+        beat_times = np.arange(phase_offset_sec, total_duration + target_segment_duration, target_segment_duration)
+        num_segments = len(beat_times) - 1
 
         print(f"[DEBUG] BPM: {bpm:.1f}, Beat duration: {beat_duration:.3f}s, Segment duration: {target_segment_duration:.3f}s")
         print(f"[DEBUG] Frame-based timing: {frames_per_segment} frames/segment, {num_segments} segments")
@@ -898,7 +1043,8 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
             "duration_sec": round(duration_sec, 1),
             "time_signature": "2/4",
             "key": estimated_key,
-            "bars": bars
+            "bars": bars,
+            "phase_offset_sec": round(phase_offset_sec, 4),
         }
 
     except Exception as e:
@@ -971,9 +1117,12 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
              # Force 60s hardcap (ignore environment or input)
              MAX_ANALYSIS_SEC = 60.0
              print("[INFO] Mode: PREVIEW -> Forced duration 60.0s")
-        else:
-             # Normal logic
-             MAX_ANALYSIS_SEC = float(os.getenv("MAX_ANALYSIS_SEC", "120"))
+        elif mode == AnalyzeMode.EARLY_ACCESS:
+             MAX_ANALYSIS_SEC = float(os.getenv("MAX_ANALYSIS_SEC", "300"))
+             print(f"[INFO] Mode: EARLY_ACCESS -> Max duration {MAX_ANALYSIS_SEC}s")
+        else:  # FULL
+             MAX_ANALYSIS_SEC = float(os.getenv("MAX_ANALYSIS_SEC", "600"))
+             print(f"[INFO] Mode: FULL -> Max duration {MAX_ANALYSIS_SEC}s")
 
         # 2. Usage Check (Early Access)
         if mode == AnalyzeMode.EARLY_ACCESS:
@@ -986,9 +1135,8 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
         # 3) Remove initial get_duration to avoid "decode stall"
         # We process until MAX_ANALYSIS_SEC or EOF
         
-        bpm = 120.0
-        seconds_per_beat = 60.0 / bpm
-        segment_duration = seconds_per_beat * 2  # beats_per_segment=2 → 1秒
+        bpm = None  # 最初のチャンクで検出されたBPMを使用
+        segment_duration = None  # BPM検出後に計算
 
         all_bars: list[dict] = []
         key_votes: list[str] = []
@@ -1000,8 +1148,13 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
         # This is an approximation since we might stop early, but ensures 0-100 scale
         estimated_total_chunks = int(math.ceil(MAX_ANALYSIS_SEC / CHUNK_SEC))
 
+        FIRST_CHUNK_SEC = 60.0  # 初回チャンクは60秒（BPM検出精度のため）
+
         while offset < MAX_ANALYSIS_SEC:
-            dur = min(CHUNK_SEC, MAX_ANALYSIS_SEC - offset)
+            if chunk_idx == 0:
+                dur = min(FIRST_CHUNK_SEC, MAX_ANALYSIS_SEC - offset)
+            else:
+                dur = min(CHUNK_SEC, MAX_ANALYSIS_SEC - offset)
             
             # Progress calculation based on estimated max duration
             base = (chunk_idx / estimated_total_chunks) * 100.0
@@ -1023,7 +1176,8 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
                 file_path,
                 progress_callback=chunk_cb,
                 offset_sec=offset,
-                duration_limit_sec=dur
+                duration_limit_sec=dur,
+                forced_bpm=bpm  # 最初のチャンク以降はBPMを統一
             )
 
             # Check for effective end of file (short read)
@@ -1032,26 +1186,39 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
             chunk_bars = raw["bars"]
             key_votes.append(raw.get("key", "Unknown"))
 
-            for i, bar in enumerate(chunk_bars):
-                start_sec = offset + i * segment_duration
-                
-                # Check bounds against actual chunk duration
-                chunk_end_abs = offset + actual_dur
-                
-                # Setup this segment's end
-                end_sec = offset + (i + 1) * segment_duration
-                
-                if start_sec >= chunk_end_abs:
-                    break
-                if end_sec > chunk_end_abs:
-                    end_sec = chunk_end_abs
+            # 最初のチャンクからBPMを取得
+            if bpm is None:
+                bpm = raw.get("bpm", 120.0)
+                seconds_per_beat = 60.0 / bpm
+                segment_duration = seconds_per_beat * 2
+                print(f"[ChunkMerge] Using detected BPM: {bpm:.1f}, segment_duration: {segment_duration:.3f}s")
 
-                # No merging, strictly append grid items
-                # Frontend expects "bars" list where index corresponds to time slot
+            for i, bar in enumerate(chunk_bars):
+                # チャンクのbar配列からstart_sec/end_secを直接取得（オフセット加算）
+                bar_start = bar.get("start_sec")
+                bar_end = bar.get("end_sec")
+
+                if bar_start is not None and bar_end is not None:
+                    abs_start = offset + float(bar_start)
+                    abs_end = offset + float(bar_end)
+                else:
+                    # フォールバック: segment_durationベースで計算
+                    abs_start = offset + i * segment_duration
+                    abs_end = offset + (i + 1) * segment_duration
+
+                # チャンク境界を超えた小節は除外
+                chunk_end_abs = offset + actual_dur
+                if abs_start >= chunk_end_abs:
+                    break
+                if abs_end > chunk_end_abs:
+                    abs_end = chunk_end_abs
+
                 bar_obj = {
                     "bar": len(all_bars) + 1,
                     "chord": bar["chord"],
-                    "tab": bar.get("tab")
+                    "tab": bar.get("tab"),
+                    "start_sec": abs_start,
+                    "end_sec": abs_end,
                 }
                 all_bars.append(bar_obj)
 
@@ -1067,14 +1234,34 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
 
         # key matches first chunk
         key = key_votes[0] if key_votes else "Unknown"
+        # bpmがNoneのままの場合（チャンク0個）はフォールバック
+        if bpm is None:
+            bpm = 120.0
 
-        # Force precise timing generation
-        all_bars = add_bar_timing(
-            all_bars,
-            bpm=bpm,
-            time_signature="2/4",
-            analyzed_duration_sec=offset
-        )
+        # barにstart_secが既にある場合はadd_bar_timingをスキップ
+        if all_bars and "start_sec" not in all_bars[0]:
+            all_bars = add_bar_timing(
+                all_bars,
+                bpm=bpm,
+                time_signature="2/4",
+                analyzed_duration_sec=offset
+            )
+
+        # チャンク結合後: 統一グリッドでタイミングを再計算
+        # 各チャンクが独立に位相検出するため、チャンク境界でタイミング不連続が発生する
+        # 全バーを単一BPMグリッドで上書きして連続性を保証する
+        if bpm is not None and len(all_bars) > 1:
+            seg_duration = (60.0 / bpm) * 4  # 4拍/バー (2 beat_times entries × 2 beats each)
+            first_start = all_bars[0].get("start_sec", 0.0)
+            print(f"[ChunkMerge] Unifying bar timing: {len(all_bars)} bars, seg={seg_duration:.4f}s, phase={first_start:.4f}s")
+            for i, bar in enumerate(all_bars):
+                bar["start_sec"] = round(first_start + i * seg_duration, 4)
+                bar["end_sec"] = round(first_start + (i + 1) * seg_duration, 4)
+
+        # 診断: 統一グリッド適用後のバー間隔を確認
+        if len(all_bars) >= 2:
+            _diag_dur = round(all_bars[1]["start_sec"] - all_bars[0]["start_sec"], 4)
+            print(f"[ChunkMerge] Final bar duration: {_diag_dur}s (expected {round((60.0/bpm)*4, 4)}s)")
 
         final_result = {
             "bpm": bpm,
@@ -1086,7 +1273,8 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
             "is_preview": (mode == AnalyzeMode.PREVIEW),
             "analyzed_duration_sec": round(offset, 1),
             "export_allowed": (mode == AnalyzeMode.EARLY_ACCESS or mode == AnalyzeMode.FULL),
-            "bars": all_bars # Return bars even in Preview (limited by duration cap)
+            "bars": all_bars, # Return bars even in Preview (limited by duration cap)
+            "_build": "unified-grid-v2",
         }
 
         jobs[job_id] = {
