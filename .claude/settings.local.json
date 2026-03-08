@@ -20,7 +20,17 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(timeout 5 cmd:*)",
-      "Bash(exit:*)"
+      "Bash(exit:*)",
+      "Bash(Get-Process)",
+      "Bash(Where-Object {$_ProcessName -eq \"python\" -or $_ProcessName -eq \"uvicorn\"})",
+      "Bash(Select-Object Id,ProcessName,StartTime)",
+      "Bash(python -m py_compile:*)",
+      "Bash(dir:*)",
+      "Bash(npx tsc:*)",
+      "Bash(.venvScriptspip show yt-dlp)",
+      "Bash(.venvScriptspython -c \"import yt_dlp; print\\(yt_dlp.version.__version__\\)\")",
+      "Bash(\".venv\\\\Scripts\\\\python.exe\":*)",
+      "Bash(\".venv\\\\Scripts\\\\pip.exe\" install --upgrade yt-dlp)"
     ],
     "deny": [],
     "ask": []

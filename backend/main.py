@@ -210,6 +210,16 @@ def highpass_filter(y: np.ndarray, sr: int, cutoff_hz: float = 60.0) -> np.ndarr
     sos = butter(4, cutoff_hz, btype="highpass", fs=sr, output="sos")
     return sosfilt(sos, y)
 
+def lowpass_filter(y: np.ndarray, sr: int, cutoff_hz: float = 200.0, order: int = 5) -> np.ndarray:
+    """Low-pass filter for bass extraction"""
+    sos = butter(order, cutoff_hz, btype="lowpass", fs=sr, output="sos")
+    return sosfilt(sos, y)
+
+def bandpass_filter(y: np.ndarray, sr: int, low_hz: float, high_hz: float, order: int = 4) -> np.ndarray:
+    """Band-pass filter using Butterworth design."""
+    sos = butter(order, [low_hz, high_hz], btype="bandpass", fs=sr, output="sos")
+    return sosfilt(sos, y)
+
 def compute_chroma_log(y: np.ndarray, sr: int, hop_length: int = 2048) -> np.ndarray:
     """
     Compute STFT-based chroma features (more stable than CQT on Render).
@@ -653,6 +663,348 @@ def smooth_chord_sequence(chords: list[str]) -> list[str]:
             smoothed[i] = prev_c
     return smoothed
 
+# --- BPM/Tempo Verification ---
+
+def evaluate_tempo_prior(bpm: float) -> float:
+    """
+    音楽理論的な妥当性スコア。
+    一般的な音楽の多くは60-140 BPMに集中。
+
+    Args:
+        bpm: 評価するBPM値
+
+    Returns:
+        スコア（0.0-1.0）
+    """
+    if 60 <= bpm <= 100:
+        return 0.7  # バラード/ブルース/R&B（0.7に調整）
+    elif 100 < bpm <= 140:
+        return 0.7  # ポップ/ロック（0.7に調整）
+    elif 140 < bpm <= 180:
+        return 0.6  # アップテンポロック/EDM（維持）
+    elif 180 < bpm <= 240:
+        return 0.5  # 高速ロック/パンク（0.5に上げる）
+    elif 40 <= bpm < 60:
+        return 0.5  # バラード（遅め、維持）
+    else:
+        return 0.1  # 異常値（維持）
+
+
+def evaluate_bass_ac(y: np.ndarray, sr: int, candidate_bpm: float,
+                     hop_length: int = 512) -> float:
+    """
+    低音域(20-200Hz)のオンセットエンベロープの自己相関値で
+    候補BPMの周期性の強さを評価。
+    バスドラム/ベースは主拍に集中するため、真のテンポで高スコア。
+    """
+    try:
+        y_bass = lowpass_filter(y, sr, cutoff_hz=200)
+        y_bass = highpass_filter(y_bass, sr, cutoff_hz=20)
+        bass_env = librosa.onset.onset_strength(y=y_bass, sr=sr,
+                                                 hop_length=hop_length)
+        del y_bass
+
+        ac = librosa.autocorrelate(bass_env)
+        if ac[0] > 0:
+            ac = ac / ac[0]
+
+        lag = 60.0 * sr / (candidate_bpm * hop_length)
+        lag_int = int(round(lag))
+
+        if 0 < lag_int < len(ac) - 1:
+            alpha = float(ac[lag_int - 1])
+            beta = float(ac[lag_int])
+            gamma = float(ac[lag_int + 1])
+            return max(0.0, (alpha + beta + gamma) / 3.0)
+        elif 0 < lag_int < len(ac):
+            return max(0.0, float(ac[lag_int]))
+        return 0.0
+    except Exception as e:
+        print(f"[WARNING] evaluate_bass_ac failed: {e}")
+        return 0.0
+
+
+def evaluate_fullband_ac(onset_env: np.ndarray, sr: int,
+                         candidate_bpm: float,
+                         hop_length: int = 512) -> float:
+    """
+    全帯域オンセットエンベロープの自己相関値で
+    候補BPMの全体的な周期性を評価。
+    """
+    ac = librosa.autocorrelate(onset_env)
+    if ac[0] > 0:
+        ac = ac / ac[0]
+
+    lag = 60.0 * sr / (candidate_bpm * hop_length)
+    lag_int = int(round(lag))
+
+    if 0 < lag_int < len(ac) - 1:
+        alpha = float(ac[lag_int - 1])
+        beta = float(ac[lag_int])
+        gamma = float(ac[lag_int + 1])
+        return max(0.0, (alpha + beta + gamma) / 3.0)
+    elif 0 < lag_int < len(ac):
+        return max(0.0, float(ac[lag_int]))
+    return 0.0
+
+
+def evaluate_phase_concentration(onset_env: np.ndarray, sr: int,
+                                  candidate_bpm: float,
+                                  hop_length: int = 512,
+                                  n_bins: int = 8) -> float:
+    """
+    オンセットエンベロープを候補BPMの周期で折りたたみ、
+    エネルギー分布の尖度を評価。
+    正しいテンポ → ダウンビートにエネルギー集中（高スコア）
+    倍速テンポ → エネルギーが均等分布（低スコア）
+    """
+    beat_interval = 60.0 / candidate_bpm
+
+    times = librosa.frames_to_time(np.arange(len(onset_env)),
+                                    sr=sr, hop_length=hop_length)
+    phases = (times % beat_interval) / beat_interval
+
+    bins = np.zeros(n_bins)
+    counts = np.zeros(n_bins)
+    for i, phase in enumerate(phases):
+        bin_idx = min(int(phase * n_bins), n_bins - 1)
+        bins[bin_idx] += onset_env[i]
+        counts[bin_idx] += 1
+
+    avg_bins = bins / np.maximum(counts, 1)
+
+    mean_val = np.mean(avg_bins)
+    if mean_val > 0:
+        cv = np.std(avg_bins) / mean_val
+        return min(cv, 1.0)
+    return 0.0
+
+
+def verify_tempo_octave(y: np.ndarray, sr: int, detected_bpm: float, onset_env: np.ndarray) -> tuple[float, float]:
+    """
+    倍速検出を検証し、必要に応じて半分速に補正。
+    位相エネルギー集中度をゲート条件として使用:
+    半分速候補に明確な拍構造がある場合のみ補正を許可。
+    """
+    if detected_bpm < 80 or detected_bpm > 240:
+        print(f"[OctaveVerify] BPM {detected_bpm:.1f} outside correction range, keeping as-is")
+        return detected_bpm, 1.0
+
+    half_bpm = detected_bpm * 0.5
+    if half_bpm < 40:
+        return detected_bpm, 1.0
+
+    # 全シグナルを計算
+    bass_ac_half = evaluate_bass_ac(y, sr, half_bpm)
+    bass_ac_full = evaluate_bass_ac(y, sr, detected_bpm)
+    full_ac_half = evaluate_fullband_ac(onset_env, sr, half_bpm)
+    full_ac_full = evaluate_fullband_ac(onset_env, sr, detected_bpm)
+    phase_half = evaluate_phase_concentration(onset_env, sr, half_bpm)
+    phase_full = evaluate_phase_concentration(onset_env, sr, detected_bpm)
+    prior_half = evaluate_tempo_prior(half_bpm)
+    prior_full = evaluate_tempo_prior(detected_bpm)
+
+    score_half = (bass_ac_half * 0.35 + full_ac_half * 0.25 +
+                  phase_half * 0.20 + prior_half * 0.20)
+    score_full = (bass_ac_full * 0.35 + full_ac_full * 0.25 +
+                  phase_full * 0.20 + prior_full * 0.20)
+
+    print(f"[OctaveVerify] {half_bpm:.1f} BPM (×0.5): "
+          f"bass_ac={bass_ac_half:.3f}, full_ac={full_ac_half:.3f}, "
+          f"phase={phase_half:.3f}, prior={prior_half:.1f}, total={score_half:.3f}")
+    print(f"[OctaveVerify] {detected_bpm:.1f} BPM (×1.0): "
+          f"bass_ac={bass_ac_full:.3f}, full_ac={full_ac_full:.3f}, "
+          f"phase={phase_full:.3f}, prior={prior_full:.1f}, total={score_full:.3f}")
+
+    # ゲート条件: 半分速候補のビート位相エネルギー集中度
+    # 真のテンポが半分速なら、その周期でダウンビートにエネルギーが集中する。
+    # 集中度が低い(< PHASE_GATE)場合、半分速にリズム構造がない → 補正しない。
+    PHASE_GATE = 0.25
+    if phase_half < PHASE_GATE:
+        print(f"[OctaveVerify] Half-tempo phase={phase_half:.3f} < {PHASE_GATE} "
+              f"(weak beat structure) -> keeping {detected_bpm:.1f}")
+        print(f"[OctaveVerify] Selected: {detected_bpm:.1f} BPM (factor=x1.0, score={score_full:.3f})")
+        return detected_bpm, 1.0
+
+    # ゲート通過: 半分速に明確なリズム構造あり → スコア比較
+    if score_half > score_full:
+        print(f"[OctaveVerify] Selected: {half_bpm:.1f} BPM (factor=x0.5, score={score_half:.3f})")
+        return half_bpm, 0.5
+    else:
+        print(f"[OctaveVerify] Selected: {detected_bpm:.1f} BPM (factor=x1.0, score={score_full:.3f})")
+        return detected_bpm, 1.0
+
+def refine_bar_phase(y: np.ndarray, sr: int, bpm: float, phase_offset_sec: float,
+                     hop_length: int = 512, beats_per_bar: int = 4,
+                     window_frames: int = 2, octave_factor: float = 1.0) -> tuple[float, float]:
+    """
+    2段階でビート位相と小節頭を最適化:
+    Step A: バスオンセットで±半拍のビート位相微調整
+    Step B: バス-スネア複合スコアでシフトテスト（ダウンビート選択）
+            octave_factor=0.5の場合、半拍刻み8シフトで交互グリッドも評価
+    """
+    beat_duration = 60.0 / bpm
+    frame_duration = hop_length / sr
+
+    # octave_factor=0.5 の場合: Step A はスキップ (line 885) だが、
+    # Step B は半拍シフトで実行してダウンビート/バックビートを判定する。
+
+    # --- バスオンセットエンベロープ (20-200Hz) ---
+    y_bass = lowpass_filter(y, sr, cutoff_hz=200)
+    y_bass = highpass_filter(y_bass, sr, cutoff_hz=20)
+    bass_env = librosa.onset.onset_strength(y=y_bass, sr=sr, hop_length=hop_length)
+    del y_bass
+
+    total_frames = len(bass_env)
+    total_duration_sec = total_frames * frame_duration
+
+    if np.max(bass_env) < 1e-6:
+        print("[BarPhaseRefine] No bass energy detected, skipping")
+        return phase_offset_sec, 0
+
+    # --- スネアバンドエンベロープ (2000-5000Hz) ---
+    y_snare = bandpass_filter(y, sr, low_hz=2000, high_hz=5000)
+    snare_env = librosa.onset.onset_strength(y=y_snare, sr=sr, hop_length=hop_length)
+    del y_snare
+
+    # ============================================================
+    # Step A: バス基準ビート位相微調整
+    # ±半拍の範囲でフレーム単位に探索し、ビートグリッド上の
+    # バスエネルギーが最大になる位相を選択
+    # octave_factor=0.5の場合はスキップ（位相は元BPMのビートグリッド上
+    # にあり、フレームレベル探索でグリッドからずれるのを防ぐため）
+    # ============================================================
+    beat_period_frames = beat_duration / frame_duration
+    current_phase_frames = phase_offset_sec / frame_duration
+
+    if octave_factor == 0.5:
+        # オクターブ補正時: 位相は元BPM(2倍速)のビート上にあるので
+        # フレームレベル微調整はスキップ（Step Bの半拍シフトで対応）
+        refined_beat_phase = phase_offset_sec
+        print(f"[BarPhaseRefine] Step A: skipped (octave_factor=0.5), "
+              f"keeping phase at {refined_beat_phase*1000:.1f}ms")
+    else:
+        search_range_frames = int(beat_period_frames / 2)
+
+        best_bass_score = -1.0
+        best_delta = 0
+
+        for delta in range(-search_range_frames, search_range_frames + 1):
+            candidate_phase_f = current_phase_frames + delta
+            if candidate_phase_f < 0:
+                continue
+
+            grid = np.arange(candidate_phase_f, total_frames, beat_period_frames)
+            grid_int = np.round(grid).astype(int)
+            grid_int = grid_int[(grid_int >= 0) & (grid_int < total_frames)]
+
+            if len(grid_int) < 4:
+                continue
+
+            score = 0.0
+            for f in grid_int:
+                lo = max(0, f - window_frames)
+                hi = min(total_frames, f + window_frames + 1)
+                score += float(np.max(bass_env[lo:hi]))
+
+            if score > best_bass_score:
+                best_bass_score = score
+                best_delta = delta
+
+        refined_beat_phase = (current_phase_frames + best_delta) * frame_duration
+
+        if best_delta != 0:
+            print(f"[BarPhaseRefine] Step A: adjusted by {best_delta} frames "
+                  f"({best_delta * frame_duration * 1000:.1f}ms): "
+                  f"{phase_offset_sec*1000:.1f}ms -> {refined_beat_phase*1000:.1f}ms")
+        else:
+            print(f"[BarPhaseRefine] Step A: unchanged at {refined_beat_phase*1000:.1f}ms")
+
+    # ============================================================
+    # Step B: バックビートパターン認識型ダウンビート選択
+    # score = bass_avg - ALPHA * snare_avg + BETA * backbeat_snare_avg
+    # ダウンビート(beat1): キックのみ、2&4拍目にスネア → 高score
+    # バックビート(beat2,4): キック+スネア、1&3拍目にスネアなし → 低score
+    # ============================================================
+    ALPHA = 0.5
+    BETA = 0.5
+
+    bass_max = float(np.max(bass_env))
+    snare_max = float(np.max(snare_env))
+    snare_active = snare_max > (bass_max * 0.05)
+
+    if not snare_active:
+        print("[BarPhaseRefine] Step B: Snare band too weak, using bass-only scoring")
+        ALPHA = 0.0
+        BETA = 0.0
+
+    bass_norm = bass_env / bass_max
+    snare_norm = snare_env / snare_max if snare_max > 1e-6 else snare_env
+
+    # 半拍刻み8候補: [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5]
+    # 位相検出が裏拍にロックした場合、整数シフト[0,1,2,3]だけでは
+    # 全候補が裏拍になり補正不可能。半拍シフトで表拍もテストする。
+    shifts_to_test = [i * 0.5 for i in range(beats_per_bar * 2)]
+
+    scores_b = []
+    for shift in shifts_to_test:
+        candidate_phase = refined_beat_phase + shift * beat_duration
+        bar_starts = np.arange(candidate_phase, total_duration_sec,
+                               beat_duration * beats_per_bar)
+        bar_frames = (bar_starts / frame_duration).astype(int)
+
+        bass_sum = 0.0
+        snare_sum = 0.0
+        count = 0
+        for f in bar_frames:
+            lo = max(0, f - window_frames)
+            hi = min(total_frames, f + window_frames + 1)
+            if lo < hi:
+                bass_sum += float(np.max(bass_norm[lo:hi]))
+                snare_sum += float(np.max(snare_norm[lo:hi]))
+                count += 1
+
+        # バックビート検出: 各バーの2拍目と4拍目のスネアエネルギー
+        bb_snare_sum = 0.0
+        bb_count = 0
+        for bar_start_sec in bar_starts:
+            for offset_beats in [1, 3]:  # beat 2 and beat 4
+                bb_sec = bar_start_sec + offset_beats * beat_duration
+                if bb_sec >= total_duration_sec:
+                    continue
+                bb_frame = int(bb_sec / frame_duration)
+                lo = max(0, bb_frame - window_frames)
+                hi = min(total_frames, bb_frame + window_frames + 1)
+                if lo < hi:
+                    bb_snare_sum += float(np.max(snare_norm[lo:hi]))
+                    bb_count += 1
+
+        bass_avg = bass_sum / max(count, 1)
+        snare_avg = snare_sum / max(count, 1)
+        bb_snare_avg = bb_snare_sum / max(bb_count, 1)
+        composite = bass_avg - ALPHA * snare_avg + BETA * bb_snare_avg
+        scores_b.append(composite)
+        print(f"[BarPhaseRefine] Step B: shift={shift}: "
+              f"phase={candidate_phase*1000:.1f}ms, bars={count}, "
+              f"bass={bass_avg:.4f}, snare={snare_avg:.4f}, "
+              f"bb_snare={bb_snare_avg:.4f}, score={composite:.4f}")
+
+    best_idx = int(np.argmax(scores_b))
+    best_shift = shifts_to_test[best_idx]
+
+    # ステータスクオ保護: 2%未満の改善なら変更しない
+    if best_idx != 0:
+        improvement = (scores_b[best_idx] - scores_b[0]) / (abs(scores_b[0]) + 1e-8)
+        if improvement < 0.02:
+            print(f"[BarPhaseRefine] Step B: shift={best_shift} "
+                  f"improvement={improvement:.3f} < 0.02, keeping shift=0")
+            best_shift = 0.0
+
+    final_phase = refined_beat_phase + best_shift * beat_duration
+    print(f"[BarPhaseRefine] Final: shift={best_shift}, "
+          f"{phase_offset_sec*1000:.1f}ms -> {final_phase*1000:.1f}ms")
+    return final_phase, best_shift
+
 # --- Endpoints ---
 
 class YouTubeRequest(BaseModel):
@@ -736,15 +1088,25 @@ def download_youtube_audio(url: str, cookie_path: str | None = None) -> str:
                 )
 
             # 403 Forbidden (Login/Bot/Privacy)
-            if "Sign in to confirm you’re not a bot" in msg or "confirm you’re not a bot" in msg or "cookies" in msg or "This video is only available to Music Premium members" in msg or "Private video" in msg:
+            if ("Sign in to confirm you're not a bot" in msg
+                or "confirm you're not a bot" in msg
+                or "cookies" in msg
+                or "This video is only available to Music Premium members" in msg
+                or "Private video" in msg
+                or "HTTP Error 403" in msg
+                or "Forbidden" in msg):
                 raise HTTPException(
                     status_code=403,
                     detail="YouTube Access Denied (Login/Cookies required). Please try a different video or upload cookies.txt."
                 )
             raise e
 
-def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float = 0.0, duration_limit_sec: float | None = None, forced_bpm: float | None = None) -> dict:
-    """Core analysis logic reusable for both uploads and URLs."""
+def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float = 0.0, duration_limit_sec: float | None = None, forced_bpm: float | None = None, forced_phase: float | None = None) -> dict:
+    """Core analysis logic reusable for both uploads and URLs.
+
+    Args:
+        forced_phase: Optional phase offset in seconds to force (for multi-chunk consistency)
+    """
     
     def _progress(p: float):
         if progress_callback:
@@ -788,6 +1150,9 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
         num_onsets = len(onset_frames_detected)
         print(f"[DEBUG] Detected {num_onsets} onsets in {total_frames} frames")
 
+        octave_factor = 1.0  # オクターブ補正時に更新される
+        phase_detect_bpm = None  # 位相検出用のBPM（オクターブ補正前）
+
         if forced_bpm is not None:
             bpm = forced_bpm
             beat_frames = []
@@ -826,9 +1191,13 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
                 onset_hits = sum(1 for o in onset_frames_detected if int(o) in grid_set)
                 recall = onset_hits / max(1, num_onsets)
 
-                # F1スコア
+                # F_betaスコア (beta=0.8: Precisionを重視)
+                # 高Precision = ビート位置にオンセットあり（正しいBPM）
+                # 低Recall = ビート間にオンセット（細分音符、正常）
+                BEAT_F_BETA = 0.8
+                beta_sq = BEAT_F_BETA ** 2  # 0.64
                 if precision + recall > 0:
-                    score = 2 * precision * recall / (precision + recall)
+                    score = (1 + beta_sq) * precision * recall / (beta_sq * precision + recall)
                 else:
                     score = 0.0
 
@@ -840,7 +1209,7 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
             # 上位5候補をログ出力
             top_candidates.sort(key=lambda x: x[1], reverse=True)
             for c, s, p, r in top_candidates[:5]:
-                print(f"[DEBUG] BPM candidate: {c} (P={p:.3f} R={r:.3f} F1={s:.3f})")
+                print(f"[DEBUG] BPM candidate: {c} (P={p:.3f} R={r:.3f} Fb={s:.3f})")
 
             # Stage 2: 自己相関ベースのBPMリファインメント
             coarse_bpm = best_bpm
@@ -885,15 +1254,15 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
                     bpm = coarse_bpm
                     print(f"[DEBUG] AC peak too far ({refined_bpm:.1f}), keeping coarse {coarse_bpm:.0f}")
                 elif abs(refined_bpm - coarse_bpm) < 1.0:
-                    # 1BPM未満の差 → 粗BPM（整数）を維持
-                    bpm = coarse_bpm
-                    print(f"[DEBUG] AC refined={refined_bpm:.1f} (delta<1), keeping coarse {coarse_bpm:.0f} "
+                    # 1BPM未満の差 → ACリファイン結果を採用（累積ドリフト防止）
+                    bpm = round(refined_bpm, 1)
+                    print(f"[DEBUG] AC refined={refined_bpm:.1f} (delta<1), using refined {bpm:.1f} "
                           f"(lag={refined_lag:.2f}, ac={ac_confidence:.3f})")
                 else:
                     # 1-5 BPMの差 → ACリファイン結果を採用
                     bpm = round(refined_bpm, 1)
                     print(f"[DEBUG] BPM refined via autocorrelation: {coarse_bpm:.0f} -> {bpm:.1f} "
-                          f"(lag={refined_lag:.2f}, ac={ac_confidence:.3f}, coarse_F1={coarse_f1:.3f})")
+                          f"(lag={refined_lag:.2f}, ac={ac_confidence:.3f}, coarse_Fb={coarse_f1:.3f})")
             else:
                 bpm = coarse_bpm
                 print(f"[DEBUG] Audio too short for AC refinement, keeping coarse BPM: {coarse_bpm:.0f}")
@@ -901,33 +1270,124 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
             del onset_env_fine, ac
             beat_frames = []
 
+            # Stage 2.5: オクターブ検証（倍速/半分速検出の補正）
+            # 位相検出はオクターブ補正前のBPMで行うため、事前に保存
+            phase_detect_bpm = bpm
+            if bpm is not None:
+                corrected_bpm, octave_factor = verify_tempo_octave(y, sr, bpm, onset_env)
+                if octave_factor != 1.0:
+                    print(f"[OctaveCorrection] {bpm:.1f} → {corrected_bpm:.1f} BPM (×{octave_factor})")
+                    bpm = corrected_bpm
+
+            # Stage 2.7: バス自己相関によるテンポ補正
+            # 全帯域オンセットはハイハット等で高速テンポを検出しやすい。
+            # バスドラム (20-200Hz) の自己相関ピークが真のテンポを示す場合がある。
+            if bpm is not None and bpm > 200:
+                y_bass_temp = lowpass_filter(y, sr, cutoff_hz=200)
+                y_bass_temp = highpass_filter(y_bass_temp, sr, cutoff_hz=20)
+                bass_env_temp = librosa.onset.onset_strength(
+                    y=y_bass_temp, sr=sr, hop_length=512)
+                del y_bass_temp
+                ac_bass = librosa.autocorrelate(bass_env_temp)
+                del bass_env_temp
+                if ac_bass[0] > 0:
+                    ac_bass = ac_bass / ac_bass[0]
+
+                best_bass_bpm = bpm
+                best_bass_val = 0.0
+                for candidate in range(60, 201, 2):
+                    lag = 60.0 * sr / (candidate * 512)
+                    lag_int = int(round(lag))
+                    if 0 < lag_int < len(ac_bass) - 1:
+                        val = float(
+                            (ac_bass[lag_int - 1] + ac_bass[lag_int]
+                             + ac_bass[lag_int + 1]) / 3.0)
+                        if val > best_bass_val:
+                            best_bass_val = val
+                            best_bass_bpm = float(candidate)
+
+                # 検出BPMのバスAC値を取得
+                det_lag = 60.0 * sr / (bpm * 512)
+                det_lag_int = int(round(det_lag))
+                det_bass_val = 0.0
+                if 0 < det_lag_int < len(ac_bass) - 1:
+                    det_bass_val = float(
+                        (ac_bass[det_lag_int - 1] + ac_bass[det_lag_int]
+                         + ac_bass[det_lag_int + 1]) / 3.0)
+
+                del ac_bass
+
+                if abs(best_bass_bpm - bpm) > 10:
+                    prior_bass = evaluate_tempo_prior(best_bass_bpm)
+                    prior_det = evaluate_tempo_prior(bpm)
+                    score_bass = best_bass_val * 0.6 + prior_bass * 0.4
+                    score_det = det_bass_val * 0.6 + prior_det * 0.4
+                    print(f"[BassTempoCheck] Bass peak: {best_bass_bpm:.0f} BPM "
+                          f"(ac={best_bass_val:.3f}, prior={prior_bass:.1f}, "
+                          f"score={score_bass:.3f})")
+                    print(f"[BassTempoCheck] Detected: {bpm:.1f} BPM "
+                          f"(ac={det_bass_val:.3f}, prior={prior_det:.1f}, "
+                          f"score={score_det:.3f})")
+                    if score_bass > score_det * 1.05:
+                        print(f"[BassTempoCorrection] {bpm:.1f} → "
+                              f"{best_bass_bpm:.0f} BPM")
+                        bpm = best_bass_bpm
+                        octave_factor = 1.0
+                    else:
+                        print(f"[BassTempoCheck] Keeping {bpm:.1f} BPM "
+                              f"(bass advantage insufficient)")
+                else:
+                    print(f"[BassTempoCheck] Bass peak {best_bass_bpm:.0f} BPM "
+                          f"close to detected {bpm:.1f}, no correction needed")
+
         # Stage 3: ビート位相検出 - 最適なグリッド開始位置を探索
-        beat_period_onset = 60.0 * sr / (bpm * 512)
-        best_phase = 0.0
-        best_phase_score = -1.0
-        phase_tolerance = 3
+        if forced_phase is not None:
+            # チャンク統一のため、位相を強制使用
+            phase_offset_sec = forced_phase
+            print(f"[DEBUG] Beat phase offset: {phase_offset_sec*1000:.1f}ms (forced from chunk 0)")
+            del onset_env, onset_set
+            _progress(35)
+        else:
+            # 通常の位相検出(最初のチャンクのみ)
+            # オクターブ補正前のBPMで位相を検出（補正後だと両グリッドで
+            # 同精度になり正しいビートを区別できないため）
+            _phase_bpm = phase_detect_bpm if octave_factor != 1.0 else bpm
+            beat_period_onset = 60.0 * sr / (_phase_bpm * 512)
+            best_phase = 0.0
+            best_phase_score = -1.0
+            phase_tolerance = 3
 
-        for phase_10x in range(0, int(beat_period_onset * 10)):
-            phase = phase_10x / 10.0
-            grid = np.arange(phase, total_frames, beat_period_onset)
-            if len(grid) == 0:
-                continue
-            hits = 0
-            for g in grid:
-                g_int = int(round(g))
-                for t in range(-phase_tolerance, phase_tolerance + 1):
-                    if (g_int + t) in onset_set:
-                        hits += 1
-                        break
-            precision = hits / len(grid)
-            if precision > best_phase_score:
-                best_phase_score = precision
-                best_phase = phase
+            for phase_10x in range(0, int(beat_period_onset * 10)):
+                phase = phase_10x / 10.0
+                grid = np.arange(phase, total_frames, beat_period_onset)
+                if len(grid) == 0:
+                    continue
+                hits = 0
+                for g in grid:
+                    g_int = int(round(g))
+                    for t in range(-phase_tolerance, phase_tolerance + 1):
+                        if (g_int + t) in onset_set:
+                            hits += 1
+                            break
+                precision = hits / len(grid)
+                if precision > best_phase_score:
+                    best_phase_score = precision
+                    best_phase = phase
 
-        phase_offset_sec = best_phase * 512 / sr
-        print(f"[DEBUG] Beat phase offset: {phase_offset_sec*1000:.1f}ms (precision={best_phase_score:.4f})")
-        del onset_env, onset_set
-        _progress(35)
+            phase_offset_sec = best_phase * 512 / sr
+            print(f"[DEBUG] Beat phase offset: {phase_offset_sec*1000:.1f}ms (detected at {_phase_bpm:.1f}BPM, precision={best_phase_score:.4f})")
+            del onset_env, onset_set
+            _progress(35)
+
+        # Stage 3.5: 小節頭位相リファインメント
+        # ビート位相から小節頭（ダウンビート）を特定
+        if forced_phase is None:
+            refined_phase, bar_shift = refine_bar_phase(y, sr, bpm, phase_offset_sec,
+                                                        octave_factor=octave_factor)
+            if bar_shift != 0.0:
+                print(f"[BarPhaseRefine] Applied: shift={bar_shift} beats, "
+                      f"{phase_offset_sec*1000:.1f}ms -> {refined_phase*1000:.1f}ms")
+            phase_offset_sec = refined_phase
 
         # 3. Chroma
         print("[DEBUG] Computing chroma...")
@@ -1081,7 +1541,7 @@ def startup_event():
     except:
         pass
 
-def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode.PREVIEW):
+def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode.PREVIEW, source: str = "upload"):
     cleanup_jobs()
     
     # Init progress (Store mode in job)
@@ -1134,8 +1594,9 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
 
         # 3) Remove initial get_duration to avoid "decode stall"
         # We process until MAX_ANALYSIS_SEC or EOF
-        
+
         bpm = None  # 最初のチャンクで検出されたBPMを使用
+        forced_phase = None  # 最初のチャンクで検出された位相を使用(チャンク統一)
         segment_duration = None  # BPM検出後に計算
 
         all_bars: list[dict] = []
@@ -1177,21 +1638,23 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
                 progress_callback=chunk_cb,
                 offset_sec=offset,
                 duration_limit_sec=dur,
-                forced_bpm=bpm  # 最初のチャンク以降はBPMを統一
+                forced_bpm=bpm,  # 最初のチャンク以降はBPMを統一
+                forced_phase=forced_phase  # 最初のチャンク以降は位相を統一
             )
 
             # Check for effective end of file (short read)
             actual_dur = raw["duration_sec"]
-            
+
             chunk_bars = raw["bars"]
             key_votes.append(raw.get("key", "Unknown"))
 
-            # 最初のチャンクからBPMを取得
+            # 最初のチャンクからBPMと位相を取得
             if bpm is None:
                 bpm = raw.get("bpm", 120.0)
+                forced_phase = raw.get("phase_offset_sec", 0.0)  # 位相も保存
                 seconds_per_beat = 60.0 / bpm
                 segment_duration = seconds_per_beat * 2
-                print(f"[ChunkMerge] Using detected BPM: {bpm:.1f}, segment_duration: {segment_duration:.3f}s")
+                print(f"[ChunkMerge] Using detected BPM: {bpm:.1f}, phase: {forced_phase*1000:.1f}ms, segment_duration: {segment_duration:.3f}s")
 
             for i, bar in enumerate(chunk_bars):
                 # チャンクのbar配列からstart_sec/end_secを直接取得（オフセット加算）
@@ -1274,8 +1737,10 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
             "analyzed_duration_sec": round(offset, 1),
             "export_allowed": (mode == AnalyzeMode.EARLY_ACCESS or mode == AnalyzeMode.FULL),
             "bars": all_bars, # Return bars even in Preview (limited by duration cap)
-            "_build": "unified-grid-v2",
+            "_build": "build-v5.5.1",
         }
+        if source == "url" and os.path.exists(file_path):
+            final_result["audio_url"] = "/temp/" + os.path.basename(file_path)
 
         jobs[job_id] = {
             **jobs.get(job_id, {}),
@@ -1298,8 +1763,9 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
 
     finally:
         try:
-            if os.path.exists(file_path):
+            if source == "upload" and os.path.exists(file_path):
                 os.remove(file_path)
+            # source == "url" の場合はファイルを保持（cleanup_temp_dir の6時間TTLで自動削除）
         except Exception:
             pass
 
@@ -1466,8 +1932,8 @@ async def _process_analyze_url(url: str, mode: AnalyzeMode, cookies: UploadFile 
         }
         
         # Threading for URL analysis too
-        threading.Thread(target=run_analysis_bg, args=(job_id, file_path, mode)).start()
-        
+        threading.Thread(target=run_analysis_bg, args=(job_id, file_path, mode, "url")).start()
+
         return JSONResponse(status_code=202, content={"job_id": job_id})
 
     except HTTPException:

@@ -6,11 +6,13 @@ import { Loader2 } from 'lucide-react';
 import ResultDisplay from "../../components/ResultDisplay";
 import { AnalysisResult } from "../../lib/api";
 import { analysisResultToTimedChords } from "../../lib/chordTimeline";
+import { extractVideoId } from "../../lib/youtube";
 
 // Types matching Backend Contract
 
 
-type AppStatus = 'idle' | 'uploading' | 'analyzing' | 'ready' | 'error';
+type AppStatus = 'idle' | 'uploading' | 'downloading' | 'analyzing' | 'ready' | 'error';
+type InputMode = 'file' | 'url';
 
 type ErrorState = {
     code: string;
@@ -96,11 +98,13 @@ function InlineHint({ children, className }: { children: React.ReactNode; classN
 
 export default function EarlyAccessPage() {
     const router = useRouter();
+    const [inputMode, setInputMode] = useState<InputMode>('file');
     const [file, setFile] = useState<File | null>(null);
+    const [youtubeUrl, setYoutubeUrl] = useState('');
     const [audioUrl, setAudioUrl] = useState<string | null>(null);
     const [result, setResult] = useState<AnalysisResult | null>(null);
     const [status, setStatus] = useState<AppStatus>('idle');
-    const [progress, setProgress] = useState<number>(0); // Added progress state
+    const [progress, setProgress] = useState<number>(0);
     const [error, setError] = useState<ErrorState | null>(null);
 
     // Free Tier / CTA State
@@ -251,6 +255,13 @@ export default function EarlyAccessPage() {
                     const resultData: AnalysisResult = await r.json();
 
                     setResult(resultData);
+                    // URL解析の場合、バックエンドから返されるaudio_urlを使用
+                    if (resultData.audio_url) {
+                        const normalized = resultData.audio_url.startsWith('http')
+                            ? resultData.audio_url
+                            : `${base}${resultData.audio_url}`;
+                        setAudioUrl(normalized);
+                    }
                     setProgress(100);
                     setStatus('ready');
 
@@ -360,6 +371,85 @@ export default function EarlyAccessPage() {
         }
     };
 
+    const handleAnalyzeUrl = async () => {
+        const trimmed = youtubeUrl.trim();
+        if (!trimmed) return;
+
+        // URL検証
+        const videoId = extractVideoId(trimmed);
+        if (!videoId) {
+            setError({ code: 'INVALID_URL', message: 'YouTube URLの形式が正しくありません。https://www.youtube.com/watch?v=... の形式で入力してください。' });
+            return;
+        }
+
+        // Free tier gate
+        const gate = canAnalyze(eaUsage);
+        if (!gate.ok) {
+            setCtaReason("LIMIT_REACHED");
+            setCtaOpen(true);
+            return;
+        }
+
+        if (!process.env.NEXT_PUBLIC_API_BASE_URL) {
+            setError({ code: 'CONFIG_ERROR', message: 'Configuration Error: API Base URL not set.' });
+            return;
+        }
+
+        if (abortPollingRef.current) {
+            abortPollingRef.current.abort();
+        }
+        const controller = new AbortController();
+        abortPollingRef.current = controller;
+
+        setStatus('downloading');
+        setProgress(0);
+        setError(null);
+        setResult(null);
+        setAudioUrl(null);
+
+        try {
+            const base = process.env.NEXT_PUBLIC_API_BASE_URL;
+            const formData = new FormData();
+            formData.append('url', trimmed);
+            formData.append('mode', 'EARLY_ACCESS');
+
+            const submittedAt = Date.now();
+            console.log("Submitting URL job to:", `${base}/analyze/url`);
+
+            const res = await fetch(`${base}/analyze/url`, {
+                method: 'POST',
+                body: formData,
+                signal: controller.signal,
+            });
+
+            if (!res.ok) {
+                const errorData = await res.json().catch(() => ({}));
+                const msg = errorData.detail || `Status ${res.status}`;
+                if (res.status === 429 || msg.includes("429") || msg.includes("Rate Limit")) {
+                    throw { code: 'YOUTUBE_RATE_LIMIT', message: 'YouTubeのレート制限に達しました。数分後に再度お試しください。' };
+                } else if (res.status === 403 || msg.includes("403") || msg.includes("Access Denied")) {
+                    throw { code: 'YOUTUBE_ACCESS_DENIED', message: 'この動画にはアクセスできません。別の動画をお試しいただくか、MP3をダウンロードしてファイルアップロードをご利用ください。' };
+                }
+                throw { code: `HTTP_${res.status}`, message: msg };
+            }
+
+            const { job_id } = await res.json();
+            console.log("URL job started:", job_id);
+
+            setStatus('analyzing');
+            pollJob(job_id, controller.signal, submittedAt);
+
+        } catch (err: any) {
+            if (err.name === "AbortError") return;
+            console.error('URL submission failed:', err);
+            if (err.code && err.message) {
+                setError(err);
+            } else {
+                setError({ code: 'SUBMISSION_FAILED', message: err.message || 'Failed to start URL analysis.' });
+            }
+            setStatus('error');
+        }
+    };
 
 
 
@@ -415,10 +505,10 @@ export default function EarlyAccessPage() {
         downloadFile(lines, `chords-${Date.now()}.txt`, 'text/plain');
     };
 
-    // Safe Audio Cleanup
+    // Safe Audio Cleanup (blob URLs only; backend URLs don't need revoking)
     useEffect(() => {
         return () => {
-            if (audioUrl) {
+            if (audioUrl && audioUrl.startsWith('blob:')) {
                 URL.revokeObjectURL(audioUrl);
             }
         };
@@ -444,6 +534,34 @@ export default function EarlyAccessPage() {
                     </p>
                 </header>
 
+                {/* INPUT MODE TABS */}
+                <div className="flex border-b border-neutral-800">
+                    <button
+                        onClick={() => {
+                            if (inputMode === 'url') {
+                                setInputMode('file');
+                                setError(null);
+                                if (status !== 'ready') { setStatus('idle'); setProgress(0); }
+                            }
+                        }}
+                        className={`px-6 py-3 text-sm font-medium transition-colors ${inputMode === 'file' ? 'text-teal-400 border-b-2 border-teal-400' : 'text-neutral-500 hover:text-neutral-300'}`}
+                    >
+                        File Upload
+                    </button>
+                    <button
+                        onClick={() => {
+                            if (inputMode === 'file') {
+                                setInputMode('url');
+                                setError(null);
+                                if (status !== 'ready') { setStatus('idle'); setProgress(0); }
+                            }
+                        }}
+                        className={`px-6 py-3 text-sm font-medium transition-colors ${inputMode === 'url' ? 'text-teal-400 border-b-2 border-teal-400' : 'text-neutral-500 hover:text-neutral-300'}`}
+                    >
+                        YouTube URL
+                    </button>
+                </div>
+
                 {/* UPLOAD SECTION */}
                 {/* STEP 1: UPLOAD HINT */}
                 {onboardingStep === "UPLOAD" && (
@@ -457,6 +575,9 @@ export default function EarlyAccessPage() {
                         <InlineHint>まずは、合っているかどうかを気にせず再生してください (解析完了をお待ちください)</InlineHint>
                     </div>
                 )}
+
+                {/* FILE UPLOAD INPUT */}
+                {inputMode === 'file' && (
                 <section className={`transition-opacity duration-500 ${status === 'analyzing' ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
                     <div className="bg-neutral-900/50 rounded-xl border border-neutral-800 p-8 text-center border-dashed hover:border-teal-500/50 transition-colors">
                         <input
@@ -505,6 +626,46 @@ export default function EarlyAccessPage() {
                         )}
                     </div>
                 </section>
+                )}
+
+                {/* YOUTUBE URL INPUT */}
+                {inputMode === 'url' && (
+                <section className={`transition-opacity duration-500 ${(status === 'downloading' || status === 'analyzing') ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
+                    <div className="bg-neutral-900/50 rounded-xl border border-neutral-800 p-8 border-dashed hover:border-teal-500/50 transition-colors">
+                        <div className="max-w-lg mx-auto space-y-4">
+                            <div className="flex gap-3">
+                                <input
+                                    type="url"
+                                    placeholder="https://www.youtube.com/watch?v=..."
+                                    value={youtubeUrl}
+                                    onChange={(e) => setYoutubeUrl(e.target.value)}
+                                    className="flex-1 px-4 py-3 bg-neutral-800 border border-neutral-700 rounded-lg text-white placeholder-neutral-500 focus:outline-none focus:border-teal-500 transition-colors"
+                                />
+                            </div>
+                            {status !== 'downloading' && status !== 'analyzing' && status !== 'ready' && (
+                                <button
+                                    onClick={handleAnalyzeUrl}
+                                    disabled={!youtubeUrl.trim()}
+                                    className="w-full px-8 py-3 bg-teal-600 hover:bg-teal-500 text-white font-medium rounded-lg shadow-lg hover:shadow-teal-500/20 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    Generate Chord Draft
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                </section>
+                )}
+
+                {/* DOWNLOADING STATE (YouTube) */}
+                {status === 'downloading' && (
+                    <div className="text-center py-12">
+                        <Loader2 className="h-12 w-12 animate-spin text-teal-500 mx-auto mb-4" />
+                        <h3 className="text-xl font-bold mb-2">Downloading from YouTube...</h3>
+                        <p className="text-gray-400">
+                            This may take 10-30 seconds depending on the video.
+                        </p>
+                    </div>
+                )}
 
                 {/* LOADING STATE */}
                 {status === 'analyzing' && (
