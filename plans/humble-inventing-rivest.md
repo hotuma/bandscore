@@ -722,6 +722,125 @@ uvicorn main:app --reload
 
 ---
 
+## Phase 2.5検証結果とデバッグ（2026-03-15）
+
+### 検証結果
+
+**Status**: ❌ **Phase 2.5が効果なし**
+
+| 指標 | Phase 2.5前 | Phase 2.5後 | 変化 |
+|------|------------|------------|------|
+| 最大停滞 | 10バー | 10バー | **変化なし** |
+| 6バー以上停滞箇所 | 10箇所 | 10箇所 | **変化なし** |
+
+**ユーザー報告**:
+- ✅ バックエンド再起動済み
+- ❌ `[STAGNATION]`デバッグログなし
+- 新しい問題: 音楽的に異なる部分が同じコードと検出されている
+
+### 原因診断
+
+**実装確認**:
+1. ✅ `break_long_stagnation_runs()`関数は正しく実装済み（lines 908-974）
+2. ✅ 関数は正しく呼び出されている（line 1821）
+3. ✅ シンタックスエラーなし
+4. ❌ デバッグログが出力されていない
+
+**原因の可能性**:
+- ログ出力の問題（バッファリング、リダイレクト）
+- 条件に到達していない（中間処理で停滞が解消されている？）
+- 関数が途中で失敗している
+
+### デバッグプラン
+
+#### ステップ1: ファイルベースのデバッグログ追加
+
+`print()`が見えない場合に備え、ファイル出力を追加：
+
+**[backend/main.py:908](backend/main.py#L908)** - `break_long_stagnation_runs()`関数の開始直後:
+
+```python
+def break_long_stagnation_runs(chords: list[str], max_consecutive: int = 6) -> list[str]:
+    """..."""
+    import sys
+
+    # デバッグログをファイルに出力
+    with open('debug_stagnation.log', 'a', encoding='utf-8') as f:
+        f.write(f"\n=== break_long_stagnation_runs called ===\n")
+        f.write(f"Input: {len(chords)} chords, max_consecutive={max_consecutive}\n")
+    sys.stdout.flush()
+
+    print(f"[STAGNATION-DEBUG] Function called with {len(chords)} chords")
+```
+
+**line 936** - 長い停滞検出時:
+
+```python
+if run_length > max_consecutive:
+    with open('debug_stagnation.log', 'a', encoding='utf-8') as f:
+        f.write(f"LONG RUN: {result[i]} × {run_length} bars at position {i}-{j-1}\n")
+```
+
+#### ステップ2: 中間結果の追跡
+
+**[backend/main.py:1815-1825](backend/main.py#L1815-L1825)** - 各処理段階の最大停滞を記録:
+
+```python
+def calc_max_run(chords):
+    max_run = 1
+    current_run = 1
+    for i in range(1, len(chords)):
+        if chords[i] == chords[i-1]:
+            current_run += 1
+            max_run = max(max_run, current_run)
+        else:
+            current_run = 1
+    return max_run
+
+# Line 1815
+print(f"[DEBUG] Raw chords max stagnation: {calc_max_run(raw_chords)} bars")
+
+# Line 1818
+smoothed_chords = smooth_chord_sequence_stagnation_aware(raw_chords, passes=2, max_run=6)
+print(f"[DEBUG] After stagnation-aware smoothing: {calc_max_run(smoothed_chords)} bars")
+
+# Line 1821
+smoothed_chords = break_long_stagnation_runs(smoothed_chords, max_consecutive=6)
+print(f"[DEBUG] After break_long_stagnation_runs: {calc_max_run(smoothed_chords)} bars")
+```
+
+#### ステップ3: 2段階適用（より積極的）
+
+デバッグ後も改善が見られない場合、より積極的なアプローチ：
+
+**[backend/main.py:1821](backend/main.py#L1821)** - 2回実行:
+
+```python
+smoothed_chords = break_long_stagnation_runs(smoothed_chords, max_consecutive=6)
+smoothed_chords = break_long_stagnation_runs(smoothed_chords, max_consecutive=4)
+```
+
+### 新しい問題: 音楽的セクション区別
+
+**問題**: 音楽的に異なる部分（Aメロ vs サビ）が同じコード（例: Fm7）と検出される
+
+**原因**: 現在のアルゴリズムは純粋にクロマ特徴のみでコード検出し、セクション変化を考慮していない
+
+**解決アプローチ（将来実装）**:
+1. **エネルギー/ダイナミクス情報**: RMS energy, spectral centroidでセクション境界を検出
+2. **セグメンテーション**: librosa.segment.agglomerative()でセクション分割
+3. **テンポラルコントラスト**: 音色変化が大きい場所でコード変化を優先
+
+**推奨**: まず停滞問題を完全解決してから、セクション区別に取り組む
+
+### 次のアクション
+
+1. **最優先**: デバッグログを追加してPhase 2.5が動作していない原因を特定
+2. **次**: 原因が判明したら修正、または2段階適用
+3. **その後**: 停滞解決後、音楽的セクション区別の改善
+
+---
+
 ### 廃止された段階的アプローチ
 ~~Iteration 1（保守的）~~ → スキップ（効果不十分）
 Iteration 2 + Phase 2 → **一括実装（推奨）**

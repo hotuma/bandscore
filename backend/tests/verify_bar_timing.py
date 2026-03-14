@@ -68,6 +68,7 @@ FIRST_CHUNK_SEC = 60.0
 
 all_bars = []
 bpm = None
+forced_phase = None
 segment_duration = None
 beats_per_seg = None
 chunk_idx = 0
@@ -84,7 +85,9 @@ while offset < MAX_ANALYSIS_SEC:
         test_file,
         offset_sec=offset,
         duration_limit_sec=dur,
-        forced_bpm=bpm
+        forced_bpm=bpm,
+        forced_phase=forced_phase,
+        forced_beats_per_seg=beats_per_seg
     )
 
     actual_dur = raw["duration_sec"]
@@ -92,10 +95,11 @@ while offset < MAX_ANALYSIS_SEC:
 
     if bpm is None:
         bpm = raw.get("bpm", 120.0)
+        forced_phase = raw.get("phase_offset_sec", 0.0)
         beats_per_seg = raw.get("beats_per_segment", 2)
         seconds_per_beat = 60.0 / bpm
         segment_duration = seconds_per_beat * beats_per_seg
-        print(f"  Detected BPM: {bpm:.1f}, beats_per_seg: {beats_per_seg}")
+        print(f"  Detected BPM: {bpm:.1f}, phase: {forced_phase*1000:.1f}ms, beats_per_seg: {beats_per_seg}")
 
     if len(chunk_bars) >= 2:
         d = float(chunk_bars[1]["start_sec"]) - float(chunk_bars[0]["start_sec"])

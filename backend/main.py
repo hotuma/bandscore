@@ -1435,11 +1435,12 @@ def download_youtube_audio(url: str, cookie_path: str | None = None) -> str:
                 )
             raise e
 
-def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float = 0.0, duration_limit_sec: float | None = None, forced_bpm: float | None = None, forced_phase: float | None = None, forced_last_chord: str | None = None, forced_run_length: int | None = None) -> dict:
+def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float = 0.0, duration_limit_sec: float | None = None, forced_bpm: float | None = None, forced_phase: float | None = None, forced_beats_per_seg: int | None = None, forced_last_chord: str | None = None, forced_run_length: int | None = None) -> dict:
     """Core analysis logic reusable for both uploads and URLs.
 
     Args:
         forced_phase: Optional phase offset in seconds to force (for multi-chunk consistency)
+        forced_beats_per_seg: Optional beats_per_segment to force (for multi-chunk consistency)
         forced_last_chord: Optional last chord from previous chunk (for stagnation continuity)
         forced_run_length: Optional run length from previous chunk (for stagnation continuity)
     """
@@ -1774,8 +1775,8 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
             # 後続チャンク: 固定グリッドで一貫性を保つ
             # beat_timesは1拍間隔で生成（aggregate_chroma_per_segmentがbeats_per_segmentでグループ化するため）
             beat_times = np.arange(phase_offset_sec, total_duration + target_segment_duration, beat_duration)
-            beats_per_seg = 2
-            print(f"[DEBUG] Using fixed grid (forced_phase): seg_dur={target_segment_duration:.3f}s")
+            beats_per_seg = forced_beats_per_seg if forced_beats_per_seg is not None else 2
+            print(f"[DEBUG] Using fixed grid (forced_phase): beats_per_seg={beats_per_seg}, seg_dur={target_segment_duration:.3f}s")
         else:
             # 初回チャンク: adaptive beat tracking
             try:
@@ -2070,6 +2071,7 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
                 duration_limit_sec=dur,
                 forced_bpm=bpm,  # 最初のチャンク以降はBPMを統一
                 forced_phase=forced_phase,  # 最初のチャンク以降は位相を統一
+                forced_beats_per_seg=beats_per_seg,  # 最初のチャンク以降はbeats_per_segmentを統一
                 forced_last_chord=stag_last_chord,
                 forced_run_length=stag_run_length,
             )
