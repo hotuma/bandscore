@@ -30,7 +30,9 @@
       "Bash(.venvScriptspip show yt-dlp)",
       "Bash(.venvScriptspython -c \"import yt_dlp; print\\(yt_dlp.version.__version__\\)\")",
       "Bash(\".venv\\\\Scripts\\\\python.exe\":*)",
-      "Bash(\".venv\\\\Scripts\\\\pip.exe\" install --upgrade yt-dlp)"
+      "Bash(\".venv\\\\Scripts\\\\pip.exe\" install --upgrade yt-dlp)",
+      "Bash(npm run build:*)",
+      "Bash(python tests/verify_chord_accuracy.py:*)"
     ],
     "deny": [],
     "ask": []

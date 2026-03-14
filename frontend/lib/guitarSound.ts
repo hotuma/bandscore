@@ -6,7 +6,21 @@ import Soundfont from "soundfont-player";
 type GuitarInstrument = any;
 
 let audioContext: AudioContext | null = null;
+let masterGain: GainNode | null = null;
 let guitarPromise: Promise<GuitarInstrument | null> | null = null;
+
+function ensureAudioContext(): AudioContext {
+    if (!audioContext) {
+        const AC = window.AudioContext || (window as any).webkitAudioContext;
+        audioContext = new AC();
+    }
+    if (!masterGain) {
+        masterGain = audioContext.createGain();
+        masterGain.gain.value = 0.8;
+        masterGain.connect(audioContext.destination);
+    }
+    return audioContext;
+}
 
 /**
  * Initialize AudioContext & Guitar instrument only on the client side.
@@ -17,21 +31,44 @@ export function getGuitar(): Promise<GuitarInstrument | null> {
         return Promise.resolve(null);
     }
 
-    if (!audioContext) {
-        const AC = window.AudioContext || (window as any).webkitAudioContext;
-        audioContext = new AC();
-    }
+    const ctx = ensureAudioContext();
 
     if (!guitarPromise) {
-        guitarPromise = Soundfont.instrument(audioContext!, "acoustic_guitar_steel")
-            .then((instrument) => instrument)
+        console.log("[SoundFont] Loading acoustic_guitar_steel...");
+        guitarPromise = Soundfont.instrument(ctx, "acoustic_guitar_steel", {
+            destination: masterGain!,
+        })
+            .then((instrument) => {
+                console.log("[SoundFont] Loaded successfully");
+                return instrument;
+            })
             .catch((err) => {
-                console.error("Failed to load guitar soundfont:", err);
+                console.error("[SoundFont] Failed to load:", err);
+                guitarPromise = null; // Allow retry on next call
                 return null;
             });
     }
 
     return guitarPromise;
+}
+
+/**
+ * Preload guitar soundfont. Call early (e.g. on component mount) to avoid
+ * delays when the first chord needs to play.
+ */
+export function preloadGuitar(): void {
+    if (typeof window === "undefined") return;
+    getGuitar();
+}
+
+/**
+ * Set the master volume for guitar chord playback.
+ * Accepts values 0..N (values > 1.0 amplify beyond default level).
+ */
+export function setGuitarSoundVolume(volume: number): void {
+    if (!audioContext || !masterGain) return;
+    const v = Math.max(0, volume);
+    masterGain.gain.setTargetAtTime(v, audioContext.currentTime, 0.01);
 }
 
 /**
@@ -43,15 +80,12 @@ export function initAudioContext(): AudioContext | null {
         return null;
     }
 
-    if (!audioContext) {
-        const AC = window.AudioContext || (window as any).webkitAudioContext;
-        audioContext = new AC();
-        console.log("[AudioContext] Initialized for synchronization");
-    }
+    ensureAudioContext();
+    console.log("[AudioContext] Initialized for synchronization");
 
     // Resume if suspended (browser autoplay policy)
-    if (audioContext.state === "suspended") {
-        audioContext.resume().catch((e) => {
+    if (audioContext!.state === "suspended") {
+        audioContext!.resume().catch((e) => {
             console.warn("[AudioContext] Resume failed:", e);
         });
     }

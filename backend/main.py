@@ -135,6 +135,62 @@ CHORD_TO_TAB: ChordTab = {
     "Am":  ["x", "0", "2", "2", "1", "0"],
     "A#m": ["x", "1", "3", "3", "2", "1"],
     "Bm":  ["x", "2", "4", "4", "3", "2"],
+
+    # Dominant 7th
+    "C7":  ["x", "3", "2", "3", "1", "0"],
+    "C#7": ["x", "4", "3", "4", "2", "x"],
+    "D7":  ["x", "x", "0", "2", "1", "2"],
+    "D#7": ["x", "6", "8", "6", "8", "6"],
+    "E7":  ["0", "2", "0", "1", "0", "0"],
+    "F7":  ["1", "3", "1", "2", "1", "1"],
+    "F#7": ["2", "4", "2", "3", "2", "2"],
+    "G7":  ["3", "2", "0", "0", "0", "1"],
+    "G#7": ["4", "6", "4", "5", "4", "4"],
+    "A7":  ["x", "0", "2", "0", "2", "0"],
+    "A#7": ["x", "1", "3", "1", "3", "1"],
+    "B7":  ["x", "2", "1", "2", "0", "2"],
+
+    # Major 7th
+    "Cmaj7":  ["x", "3", "2", "0", "0", "0"],
+    "C#maj7": ["x", "4", "3", "1", "1", "1"],
+    "Dmaj7":  ["x", "x", "0", "2", "2", "2"],
+    "D#maj7": ["x", "6", "8", "7", "8", "6"],
+    "Emaj7":  ["0", "2", "1", "1", "0", "0"],
+    "Fmaj7":  ["1", "3", "2", "2", "1", "0"],
+    "F#maj7": ["2", "4", "3", "3", "2", "1"],
+    "Gmaj7":  ["3", "2", "0", "0", "0", "2"],
+    "G#maj7": ["4", "6", "5", "5", "4", "3"],
+    "Amaj7":  ["x", "0", "2", "1", "2", "0"],
+    "A#maj7": ["x", "1", "3", "2", "3", "1"],
+    "Bmaj7":  ["x", "2", "4", "3", "4", "2"],
+
+    # sus4
+    "Csus4":  ["x", "3", "3", "0", "1", "1"],
+    "C#sus4": ["x", "4", "6", "6", "7", "4"],
+    "Dsus4":  ["x", "x", "0", "2", "3", "3"],
+    "D#sus4": ["x", "6", "8", "8", "9", "6"],
+    "Esus4":  ["0", "2", "2", "2", "0", "0"],
+    "Fsus4":  ["1", "3", "3", "3", "1", "1"],
+    "F#sus4": ["2", "4", "4", "4", "2", "2"],
+    "Gsus4":  ["3", "3", "0", "0", "1", "3"],
+    "G#sus4": ["4", "6", "6", "6", "4", "4"],
+    "Asus4":  ["x", "0", "2", "2", "3", "0"],
+    "A#sus4": ["x", "1", "3", "3", "4", "1"],
+    "Bsus4":  ["x", "2", "4", "4", "5", "2"],
+
+    # Minor 7th (m7)
+    "Cm7":  ["x", "3", "5", "3", "4", "3"],
+    "C#m7": ["x", "4", "6", "4", "5", "4"],
+    "Dm7":  ["x", "x", "0", "2", "1", "1"],
+    "D#m7": ["x", "6", "8", "6", "7", "6"],
+    "Em7":  ["0", "2", "0", "0", "0", "0"],
+    "Fm7":  ["1", "3", "1", "1", "1", "1"],
+    "F#m7": ["2", "4", "2", "2", "2", "2"],
+    "Gm7":  ["3", "5", "3", "3", "3", "3"],
+    "G#m7": ["4", "6", "4", "4", "4", "4"],
+    "Am7":  ["x", "0", "2", "0", "1", "0"],
+    "A#m7": ["x", "1", "3", "1", "2", "1"],
+    "Bm7":  ["x", "2", "0", "2", "0", "2"],
 }
 
 def chord_to_tab(chord: str) -> Optional[list[str]]:
@@ -222,12 +278,17 @@ def bandpass_filter(y: np.ndarray, sr: int, low_hz: float, high_hz: float, order
 
 def compute_chroma_log(y: np.ndarray, sr: int, hop_length: int = 2048) -> np.ndarray:
     """
-    Compute STFT-based chroma features (more stable than CQT on Render).
+    Compute STFT-based chroma features with HPSS (harmonic separation).
+    HPSS removes percussive components (drums) for cleaner chroma.
     Returns: (12, T)
     """
-    # STFT-based chroma (Numba/JIT依存が小さく、Renderで安定しやすい)
-    n_fft = 2048
-    chroma = librosa.feature.chroma_stft(y=y, sr=sr, hop_length=hop_length, n_fft=n_fft)
+    # HPSS: 調波成分のみ使用（ドラム打撃をクロマから除去）
+    y_harmonic = librosa.effects.harmonic(y, margin=4.0)
+
+    # n_fft=4096 で周波数解像度を向上（低音域のピッチ分離に有効）
+    n_fft = 4096
+    chroma = librosa.feature.chroma_stft(y=y_harmonic, sr=sr, hop_length=hop_length, n_fft=n_fft)
+    del y_harmonic
 
     # Log compression: log(1 + k * chroma)
     k = 10.0
@@ -239,13 +300,15 @@ def compute_chroma_log(y: np.ndarray, sr: int, hop_length: int = 2048) -> np.nda
 
 def compute_bass_chroma(y: np.ndarray, sr: int, hop_length: int = 2048) -> np.ndarray:
     """
-    Compute Bass Chroma (STFT based).
+    Compute Bass Chroma from low-frequency band (60-300Hz).
+    Isolates bass/root notes for improved root detection.
     Returns: (12, T)
     """
-    # 低域を強調したいので、簡易にローカット後の y を使うのではなく、
-    # 低域強調のために少しカットオフを上げない/または別フィルタ設計も可能。
+    # 低域（60-300Hz）のみ抽出してベース音の根音を正確に取得
+    y_bass = bandpass_filter(y, sr, low_hz=60, high_hz=300)
     n_fft = 4096
-    chroma = librosa.feature.chroma_stft(y=y, sr=sr, hop_length=hop_length, n_fft=n_fft)
+    chroma = librosa.feature.chroma_stft(y=y_bass, sr=sr, hop_length=hop_length, n_fft=n_fft)
+    del y_bass
 
     k = 10.0
     chroma_log = np.log1p(k * chroma)
@@ -262,6 +325,7 @@ def rotate_template(base: np.ndarray, shift: int) -> np.ndarray:
 def build_chord_templates() -> tuple[dict[str, np.ndarray], list[str], np.ndarray]:
     """
     Build weighted chord templates.
+    Includes: Major, Minor, 7th (dominant), m7, Maj7, sus4
     Returns:
         templates: dict {name: vector}
         labels: list of chord names
@@ -269,22 +333,52 @@ def build_chord_templates() -> tuple[dict[str, np.ndarray], list[str], np.ndarra
     """
     templates = {}
 
-    # Weighted templates: Root > 5th > 3rd
-    # Intervals: 0(root), 4(maj3), 7(5th)
+    # Major: root(1.0) + maj3(0.5) + 5th(0.7)
     base_major = np.zeros(12)
     base_major[0] = 1.0   # root
     base_major[7] = 0.7   # 5th
     base_major[4] = 0.5   # 3rd
 
-    # Intervals: 0(root), 3(min3), 7(5th)
+    # Minor: root(1.0) + min3(0.5) + 5th(0.7)
     base_minor = np.zeros(12)
     base_minor[0] = 1.0
     base_minor[7] = 0.7
     base_minor[3] = 0.5
 
+    # Dominant 7th: root(1.0) + maj3(0.4) + 5th(0.6) + min7(0.35)
+    base_7 = np.zeros(12)
+    base_7[0] = 1.0
+    base_7[4] = 0.4   # maj3
+    base_7[7] = 0.6   # 5th
+    base_7[10] = 0.35  # min7
+
+    # Major 7th: root(1.0) + maj3(0.4) + 5th(0.6) + maj7(0.35)
+    base_maj7 = np.zeros(12)
+    base_maj7[0] = 1.0
+    base_maj7[4] = 0.4
+    base_maj7[7] = 0.6
+    base_maj7[11] = 0.35  # maj7
+
+    # sus4: root(1.0) + 4th(0.5) + 5th(0.7)
+    base_sus4 = np.zeros(12)
+    base_sus4[0] = 1.0
+    base_sus4[5] = 0.5   # 4th
+    base_sus4[7] = 0.7   # 5th
+
+    # Minor 7th (m7): root(1.0) + min3(0.4) + 5th(0.6) + min7(0.35)
+    base_m7 = np.zeros(12)
+    base_m7[0] = 1.0     # root
+    base_m7[3] = 0.4     # minor 3rd
+    base_m7[7] = 0.6     # perfect 5th
+    base_m7[10] = 0.35   # minor 7th
+
     for i, name in enumerate(NOTE_NAMES):
         templates[f"{name}"] = rotate_template(base_major, i)
         templates[f"{name}m"] = rotate_template(base_minor, i)
+        templates[f"{name}7"] = rotate_template(base_7, i)
+        templates[f"{name}maj7"] = rotate_template(base_maj7, i)
+        templates[f"{name}sus4"] = rotate_template(base_sus4, i)
+        templates[f"{name}m7"] = rotate_template(base_m7, i)
 
     labels = list(templates.keys())
     # Ensure consistent order
@@ -335,27 +429,40 @@ def estimate_key_from_chroma(chroma: np.ndarray) -> tuple[str, str]:
 def get_diatonic_chords_for_key(root_name: str, mode: str) -> list[str]:
     """
     Get list of diatonic chords for a given key.
+    Uses music-theory-correct 7th chord quality per scale degree.
+    Also includes sus4 for degrees I, II, IV, V (common suspensions).
     """
     root_index = NOTE_NAMES.index(root_name)
-    major_scale_degrees = [0, 2, 4, 5, 7, 9, 11]
 
     if mode == "maj" or mode == "":
-        degrees = major_scale_degrees
-        # I, ii, iii, IV, V, vi, vii°(dim -> m for simplicity)
-        qualities = ["", "m", "m", "", "", "m", "m"]
+        # Major scale degrees: I, ii, iii, IV, V, vi, vii
+        degrees = [0, 2, 4, 5, 7, 9, 11]
+        # Triad qualities
+        triad_qualities = ["", "m", "m", "", "", "m", "m"]
+        # Diatonic 7th chord qualities per degree:
+        # I=maj7, ii=m7, iii=m7, IV=maj7, V=7, vi=m7, vii=m7 (approx for dim7)
+        seventh_qualities = ["maj7", "m7", "m7", "maj7", "7", "m7", "m7"]
+        # sus4 is common on I, II, IV, V
+        sus4_degrees = {0, 2, 5, 7}  # scale degree semitones where sus4 is natural
     else:
-        # Natural Minor (Aeolian)
-        # Relative major's I is at +3 semitones from minor root (e.g. Am -> C)
-        # But here we construct from root. 
-        # Minor scale: 0, 2, 3, 5, 7, 8, 10
+        # Natural Minor (Aeolian) degrees: i, ii, III, iv, v, VI, VII
         degrees = [0, 2, 3, 5, 7, 8, 10]
-        # i, ii°, III, iv, v, VI, VII
-        qualities = ["m", "m", "", "m", "m", "", ""]
+        triad_qualities = ["m", "m", "", "m", "m", "", ""]
+        # i=m7, ii=m7(approx dim), III=maj7, iv=m7, v=m7, VI=maj7, VII=7
+        seventh_qualities = ["m7", "m7", "maj7", "m7", "m7", "maj7", "7"]
+        sus4_degrees = {0, 2, 5, 7}
 
     chords = []
-    for deg, q in zip(degrees, qualities):
+    for i, (deg, tq, sq) in enumerate(zip(degrees, triad_qualities, seventh_qualities)):
         note = NOTE_NAMES[(root_index + deg) % 12]
-        chords.append(note + q)
+        # Basic triad
+        chords.append(note + tq)
+        # Diatonic 7th
+        chords.append(note + sq)
+        # sus4 only on specific degrees
+        if deg in sus4_degrees:
+            chords.append(note + "sus4")
+
     return chords
 
 # --- Chord Detection ---
@@ -396,18 +503,20 @@ def detect_chords_matrix(
     main_matrix: np.ndarray,   # (S, 12)
     bass_matrix: np.ndarray,   # (S, 12)
     penalty_mask: Optional[np.ndarray] = None,
-    penalty_value: float = 0.15,
-    main_weight: float = 0.7,
-    bass_weight: float = 0.3,
+    penalty_value: float = 0.20,
+    main_weight: float = 0.6,
+    bass_weight: float = 0.35,
     # Stagnation prevention params (User "Golden Master")
-    flux_threshold: float = 0.15,         
+    flux_threshold: float = 0.15,
     high_flux_threshold: float = 0.35,
-    max_repeat_segments: int = 6,         # Lowered to 6 (approx 6s) for stricter UX
-    min_hold_segments: int = 2,           
+    max_repeat_segments: int = 4,         # Lowered to 4 (approx 4s) for stricter UX [Iteration 2]
+    min_hold_segments: int = 2,
     same_chord_penalty: float = 0.20,
-    long_stag_penalty: float = 0.60,
+    long_stag_penalty: float = 0.85,      # Increased from 0.60 to 0.85 [Iteration 2]
     topk: int = 3,
-) -> list[str]:
+    forced_last_chord: Optional[str] = None,
+    forced_run_length: Optional[int] = None,
+) -> tuple[list[str], str, int]:
     """
     Detect chords using weighted combination of main and bass chroma,
     with Stagnation Prevention logic to avoid "sticky" chords.
@@ -457,11 +566,24 @@ def detect_chords_matrix(
         delta[i] = 1.0 - cs  # cosine distance-ish
 
     out_idx = np.zeros(num_segments, dtype=np.int32)
-    
-    # Initialize with first segment argmax
-    last = int(np.argmax(scores[0]))
+
+    # Initialize with forced state if provided (cross-chunk continuity)
+    if forced_last_chord is not None and forced_run_length is not None:
+        try:
+            last = chord_labels.index(forced_last_chord)
+            run_length = forced_run_length
+            print(f"[StagnationContinuity] Forcing initial state: last={forced_last_chord}, run_length={run_length}")
+        except ValueError:
+            # Chord not in labels, fall back to argmax
+            print(f"[WARN] forced_last_chord '{forced_last_chord}' not in chord_labels, using argmax")
+            last = int(np.argmax(scores[0]))
+            run_length = 1
+    else:
+        # Standard initialization with first segment argmax
+        last = int(np.argmax(scores[0]))
+        run_length = 1
+
     out_idx[0] = last
-    run_length = 1
 
     for i in range(1, num_segments):
         row = scores[i].astype(np.float32, copy=True)
@@ -488,32 +610,40 @@ def detect_chords_matrix(
         # ---- Rule B: Long stagnation (UX protection) - strongest intervention
         # If we have suppressed the same chord for too long, try to force a switch.
         if run_length >= max_repeat_segments:
-            # Case 1: High Flux -> Strong Penalty (Existing logic)
-            # The audio is changing, but the chord stayed same -> likely wrong.
-            if delta[i] >= flux_threshold:
-                # Strongly penalize last chord to encourage switching
+            excess = run_length - max_repeat_segments  # 0 at threshold, grows each bar
+
+            # Hard cap: at 2x max_repeat_segments, force switch regardless of flux/confidence
+            hard_cap = max_repeat_segments * 2  # default: 12
+
+            if run_length >= hard_cap:
+                # Absolute limit reached - apply heavy penalty unconditionally
                 row[last] = row[last] - long_stag_penalty
-                # Recompute best after penalty
                 best2 = int(np.argmax(row))
-                chosen = best2 if best2 != last else best2  # if still last, accept
-            
-            # Case 2: Low Flux but Weak Confidence (New logic)
-            # The audio isn't changing much (low flux), but we've been here too long.
-            # If the current best chord is "barely" winning, it might be an error.
-            # If the gap to 2nd place is small, force a switch to break monotony.
+                chosen = best2  # accept whatever wins after penalty
+
+            elif delta[i] >= flux_threshold:
+                # Case 1: High Flux -> Strong Penalty (unchanged)
+                row[last] = row[last] - long_stag_penalty
+                best2 = int(np.argmax(row))
+                chosen = best2 if best2 != last else best2
+
+            # Case 2: Low Flux - progressive gap escalation
+            # Gap threshold increases by 0.03 per excess bar, making it progressively
+            # harder for the incumbent chord to survive.
             else:
-                 if len(topk_idx) >= 2:
-                     cand2 = int(topk_idx[1])
-                     # Check gap in ORIGINAL scores (best is top1)
-                     gap = scores[i, best] - scores[i, cand2]
-                     
-                     # If ambiguous, force switch to 2nd best to avoid infinite stagnation
-                     if gap <= 0.10:
-                         chosen = cand2
-                     else:
-                         chosen = best
-                 else:
-                     chosen = best
+                if len(topk_idx) >= 2:
+                    cand2 = int(topk_idx[1])
+                    gap = scores[i, best] - scores[i, cand2]
+
+                    # Progressive threshold: starts at 0.08, grows faster with excess bars [Iteration 2]
+                    adjusted_gap_threshold = 0.08 + 0.05 * excess
+
+                    if gap <= adjusted_gap_threshold:
+                        chosen = cand2
+                    else:
+                        chosen = best
+                else:
+                    chosen = best
 
         else:
             chosen = best
@@ -544,7 +674,10 @@ def detect_chords_matrix(
             last = chosen
             run_length = 1
 
-    return [chord_labels[j] for j in out_idx]
+    # Extract final state for cross-chunk continuity
+    final_last_chord = chord_labels[last]
+    final_run_length = run_length
+    return [chord_labels[j] for j in out_idx], final_last_chord, final_run_length
 
 def aggregate_chroma_per_segment(
     chroma: np.ndarray,
@@ -650,18 +783,195 @@ def aggregate_chroma_per_segment(
 
     return np.stack(segment_chroma_list, axis=0), segments
 
-def smooth_chord_sequence(chords: list[str]) -> list[str]:
+def smooth_chord_sequence(chords: list[str], passes: int = 2) -> list[str]:
+    """
+    Smooth chord sequence by removing short outlier runs.
+    Pass 1+: Single-bar outlier (A-B-A -> A-A-A)
+    Pass 2+: Two-bar outlier (A-B-B-A -> A-A-A-A) when surrounded by same chord
+    Multiple passes catch cascading corrections.
+    """
     if len(chords) < 3:
         return chords[:]
 
     smoothed = chords[:]
-    for i in range(1, len(chords) - 1):
-        prev_c = smoothed[i - 1]
-        curr_c = smoothed[i]
-        next_c = smoothed[i + 1]
-        if prev_c == next_c and curr_c != prev_c:
-            smoothed[i] = prev_c
+
+    for _ in range(passes):
+        changed = False
+        result = smoothed[:]
+
+        # Single-bar outlier: A-B-A -> A-A-A
+        for i in range(1, len(result) - 1):
+            prev_c = result[i - 1]
+            curr_c = result[i]
+            next_c = result[i + 1]
+            if prev_c == next_c and curr_c != prev_c:
+                result[i] = prev_c
+                changed = True
+
+        # Two-bar outlier: A-B-B-A -> A-A-A-A
+        for i in range(1, len(result) - 2):
+            if (result[i - 1] == result[i + 2] and
+                result[i] == result[i + 1] and
+                result[i] != result[i - 1]):
+                result[i] = result[i - 1]
+                result[i + 1] = result[i - 1]
+                changed = True
+
+        smoothed = result
+        if not changed:
+            break  # Converged early, skip remaining passes
+
     return smoothed
+
+def smooth_chord_sequence_stagnation_aware(chords: list[str], passes: int = 2, max_run: int = 6) -> list[str]:
+    """
+    Smooth chord sequence while preventing long stagnation runs.
+
+    Rules:
+    1. Single-bar outlier: A-B-A -> A-A-A (existing)
+    2. Two-bar outlier: A-B-B-A -> A-A-A-A (existing)
+    3. Stagnation prevention: If smoothing would create run > max_run bars, preserve the outlier
+
+    Args:
+        chords: Input chord sequence
+        passes: Number of smoothing passes
+        max_run: Maximum allowed consecutive bars of same chord
+    """
+    if len(chords) < 3:
+        return chords[:]
+
+    smoothed = chords[:]
+
+    for _ in range(passes):
+        changed = False
+        result = smoothed[:]
+
+        # Single-bar outlier: A-B-A -> A-A-A
+        for i in range(1, len(result) - 1):
+            prev_c = result[i - 1]
+            curr_c = result[i]
+            next_c = result[i + 1]
+
+            if prev_c == next_c and curr_c != prev_c:
+                # Check if this smoothing would create excessive stagnation
+                run_before = 1
+                j = i - 1
+                while j > 0 and result[j-1] == prev_c:
+                    run_before += 1
+                    j -= 1
+
+                run_after = 1
+                j = i + 1
+                while j < len(result) - 1 and result[j+1] == next_c:
+                    run_after += 1
+                    j += 1
+
+                potential_run = run_before + 1 + run_after
+
+                # Only smooth if it doesn't create excessive stagnation
+                if potential_run <= max_run:
+                    result[i] = prev_c
+                    changed = True
+
+        # Two-bar outlier: A-B-B-A -> A-A-A-A (with same stagnation check)
+        for i in range(1, len(result) - 2):
+            if (result[i - 1] == result[i + 2] and
+                result[i] == result[i + 1] and
+                result[i] != result[i - 1]):
+
+                prev_c = result[i - 1]
+                run_before = 1
+                j = i - 1
+                while j > 0 and result[j-1] == prev_c:
+                    run_before += 1
+                    j -= 1
+
+                run_after = 1
+                j = i + 2
+                while j < len(result) - 1 and result[j+1] == prev_c:
+                    run_after += 1
+                    j += 1
+
+                potential_run = run_before + 2 + run_after
+
+                if potential_run <= max_run:
+                    result[i] = result[i - 1]
+                    result[i + 1] = result[i - 1]
+                    changed = True
+
+        smoothed = result
+        if not changed:
+            break
+
+    return smoothed
+
+def break_long_stagnation_runs(chords: list[str], max_consecutive: int = 6) -> list[str]:
+    """
+    Break up any remaining long stagnation runs after detection and smoothing.
+
+    If a chord runs for more than max_consecutive bars, attempt to split it
+    by inserting alternative chords from surrounding context.
+
+    This is a safety net for cases where detection and smoothing both failed
+    to prevent excessive stagnation.
+
+    Args:
+        chords: Input chord sequence
+        max_consecutive: Maximum allowed consecutive bars before breaking
+    """
+    if len(chords) <= max_consecutive:
+        return chords[:]
+
+    result = chords[:]
+    i = 0
+
+    while i < len(result):
+        # Count consecutive run
+        j = i
+        while j < len(result) and result[j] == result[i]:
+            j += 1
+
+        run_length = j - i
+
+        if run_length > max_consecutive:
+            # Found a long run - insert breaks
+            # Strategy: Every max_consecutive bars, insert a 1-bar variation
+            # Use the previous or next different chord if available
+
+            alt_chord = None
+
+            # Strategy 1: Use adjacent different chord
+            if i > 0 and result[i-1] != result[i]:
+                alt_chord = result[i-1]
+            elif j < len(result) and result[j] != result[i]:
+                alt_chord = result[j]
+
+            # Strategy 2: If no adjacent chord, use most frequent different chord
+            if not alt_chord:
+                from collections import Counter
+                chord_counts = Counter(result)
+                # Find most common chord that's different from current
+                for chord, count in chord_counts.most_common():
+                    if chord != result[i]:
+                        alt_chord = chord
+                        print(f"[STAGNATION] Using fallback chord: {alt_chord} (frequency: {count})")
+                        break
+
+            # Strategy 3: Ultimate fallback (rare)
+            if not alt_chord:
+                print(f"[STAGNATION] WARNING: Cannot break stagnation - no alternative chord available")
+
+            if alt_chord:
+                # Insert breaks at regular intervals
+                insert_positions = list(range(i + max_consecutive, j, max_consecutive + 1))
+                print(f"[STAGNATION] Breaking {result[i]} run (length {run_length}) with {alt_chord} at positions: {insert_positions}")
+                # Work backwards to avoid index shifting
+                for pos in reversed(insert_positions):
+                    result[pos] = alt_chord
+
+        i = j
+
+    return result
 
 # --- BPM/Tempo Verification ---
 
@@ -922,12 +1232,12 @@ def refine_bar_phase(y: np.ndarray, sr: int, bpm: float, phase_offset_sec: float
 
     # ============================================================
     # Step B: バックビートパターン認識型ダウンビート選択
-    # score = bass_avg - ALPHA * snare_avg + BETA * backbeat_snare_avg
-    # ダウンビート(beat1): キックのみ、2&4拍目にスネア → 高score
-    # バックビート(beat2,4): キック+スネア、1&3拍目にスネアなし → 低score
+    # score = bass_ratio + BETA * backbeat_snare_avg
+    # bass_ratio = bass / (bass + snare) でバス+スネア同時ヒットを正しく評価
+    # ダウンビート(beat1): 高bass_ratio(キックのみ)、高bb_snare(2&4拍にスネア) → 高score
+    # バックビート(beat2,4): 低bass_ratio(キック+スネア)、低bb_snare → 低score
     # ============================================================
-    ALPHA = 0.5
-    BETA = 0.5
+    BETA = 1.0
 
     bass_max = float(np.max(bass_env))
     snare_max = float(np.max(snare_env))
@@ -935,7 +1245,6 @@ def refine_bar_phase(y: np.ndarray, sr: int, bpm: float, phase_offset_sec: float
 
     if not snare_active:
         print("[BarPhaseRefine] Step B: Snare band too weak, using bass-only scoring")
-        ALPHA = 0.0
         BETA = 0.0
 
     bass_norm = bass_env / bass_max
@@ -982,7 +1291,8 @@ def refine_bar_phase(y: np.ndarray, sr: int, bpm: float, phase_offset_sec: float
         bass_avg = bass_sum / max(count, 1)
         snare_avg = snare_sum / max(count, 1)
         bb_snare_avg = bb_snare_sum / max(bb_count, 1)
-        composite = bass_avg - ALPHA * snare_avg + BETA * bb_snare_avg
+        bass_ratio = bass_avg / (bass_avg + snare_avg + 1e-8)
+        composite = bass_ratio + BETA * bb_snare_avg
         scores_b.append(composite)
         print(f"[BarPhaseRefine] Step B: shift={shift}: "
               f"phase={candidate_phase*1000:.1f}ms, bars={count}, "
@@ -1040,11 +1350,8 @@ def download_youtube_audio(url: str, cookie_path: str | None = None) -> str:
         "http_headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
         },
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "192",
-        }],
+        # MP3変換を廃止: M4A(AAC)をそのまま配信し、
+        # librosaとブラウザ間のエンコーダ遅延不一致を排除
         "outtmpl": outtmpl,
         "quiet": False,
         "no_warnings": False,
@@ -1061,17 +1368,9 @@ def download_youtube_audio(url: str, cookie_path: str | None = None) -> str:
             info = ydl.extract_info(url, download=True)
             print("[DEBUG] yt-dlp extract_info done")
             filename = ydl.prepare_filename(info)
-            # yt-dlp might change extension after conversion (e.g. .webm -> .mp3)
-            base = os.path.splitext(filename)[0]
-            final_path = base + ".mp3"
-            
-            if os.path.exists(final_path):
-                 print(f"[DEBUG] yt-dlp done: {final_path} ({os.path.getsize(final_path)} bytes)")
-                 return final_path
 
-            # 変換されず元拡張子のまま残るケースも拾う
             if os.path.exists(filename):
-                print(f"[DEBUG] yt-dlp done (no mp3 conversion): {filename} ({os.path.getsize(filename)} bytes)")
+                print(f"[DEBUG] yt-dlp done: {filename} ({os.path.getsize(filename)} bytes)")
                 return filename
 
             raise RuntimeError("yt-dlp download succeeded but output file not found")
@@ -1101,11 +1400,13 @@ def download_youtube_audio(url: str, cookie_path: str | None = None) -> str:
                 )
             raise e
 
-def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float = 0.0, duration_limit_sec: float | None = None, forced_bpm: float | None = None, forced_phase: float | None = None) -> dict:
+def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float = 0.0, duration_limit_sec: float | None = None, forced_bpm: float | None = None, forced_phase: float | None = None, forced_last_chord: str | None = None, forced_run_length: int | None = None) -> dict:
     """Core analysis logic reusable for both uploads and URLs.
 
     Args:
         forced_phase: Optional phase offset in seconds to force (for multi-chunk consistency)
+        forced_last_chord: Optional last chord from previous chunk (for stagnation continuity)
+        forced_run_length: Optional run length from previous chunk (for stagnation continuity)
     """
     
     def _progress(p: float):
@@ -1255,13 +1556,13 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
                     print(f"[DEBUG] AC peak too far ({refined_bpm:.1f}), keeping coarse {coarse_bpm:.0f}")
                 elif abs(refined_bpm - coarse_bpm) < 1.0:
                     # 1BPM未満の差 → ACリファイン結果を採用（累積ドリフト防止）
-                    bpm = round(refined_bpm, 1)
-                    print(f"[DEBUG] AC refined={refined_bpm:.1f} (delta<1), using refined {bpm:.1f} "
+                    bpm = round(refined_bpm, 2)
+                    print(f"[DEBUG] AC refined={refined_bpm:.2f} (delta<1), using refined {bpm:.2f} "
                           f"(lag={refined_lag:.2f}, ac={ac_confidence:.3f})")
                 else:
                     # 1-5 BPMの差 → ACリファイン結果を採用
-                    bpm = round(refined_bpm, 1)
-                    print(f"[DEBUG] BPM refined via autocorrelation: {coarse_bpm:.0f} -> {bpm:.1f} "
+                    bpm = round(refined_bpm, 2)
+                    print(f"[DEBUG] BPM refined via autocorrelation: {coarse_bpm:.0f} -> {bpm:.2f} "
                           f"(lag={refined_lag:.2f}, ac={ac_confidence:.3f}, coarse_Fb={coarse_f1:.3f})")
             else:
                 bpm = coarse_bpm
@@ -1343,9 +1644,26 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
         # Stage 3: ビート位相検出 - 最適なグリッド開始位置を探索
         if forced_phase is not None:
             # チャンク統一のため、位相を強制使用
-            phase_offset_sec = forced_phase
-            print(f"[DEBUG] Beat phase offset: {phase_offset_sec*1000:.1f}ms (forced from chunk 0)")
-            del onset_env, onset_set
+            if offset_sec > 0:
+                # チャンクオフセットを考慮してローカル位相を計算
+                # グローバルビートグリッド: forced_phase + n * seg_dur
+                # このチャンク内の最初のビート位置を求める
+                beat_dur = 60.0 / bpm
+                seg_dur = beat_dur * 2  # 2 beats per beat_times entry
+                elapsed = offset_sec - forced_phase
+                if elapsed > 0:
+                    remainder = elapsed % seg_dur
+                    phase_offset_sec = (seg_dur - remainder) if remainder > 1e-6 else 0.0
+                else:
+                    phase_offset_sec = forced_phase - offset_sec
+                print(f"[DEBUG] Beat phase offset: {phase_offset_sec*1000:.1f}ms "
+                      f"(local phase for chunk at offset={offset_sec:.1f}s, "
+                      f"global phase={forced_phase*1000:.1f}ms)")
+            else:
+                phase_offset_sec = forced_phase
+                print(f"[DEBUG] Beat phase offset: {phase_offset_sec*1000:.1f}ms (forced from chunk 0)")
+            del onset_set
+            # onset_env は後述の共通 del で解放
             _progress(35)
         else:
             # 通常の位相検出(最初のチャンクのみ)
@@ -1376,7 +1694,7 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
 
             phase_offset_sec = best_phase * 512 / sr
             print(f"[DEBUG] Beat phase offset: {phase_offset_sec*1000:.1f}ms (detected at {_phase_bpm:.1f}BPM, precision={best_phase_score:.4f})")
-            del onset_env, onset_set
+            del onset_set
             _progress(35)
 
         # Stage 3.5: 小節頭位相リファインメント
@@ -1390,15 +1708,14 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
             phase_offset_sec = refined_phase
 
         # 3. Chroma
-        print("[DEBUG] Computing chroma...")
-        hop_length = 4096
+        print("[DEBUG] Computing chroma (HPSS + n_fft=4096)...")
+        hop_length = 2048  # 4096→2048: 時間解像度2倍（~93ms@22050Hz）
         chroma = compute_chroma_log(y, sr, hop_length=hop_length)
         print(f"mem after chroma: {mem_mb():.1f} MB")
 
-        bass_chroma = chroma # compute_bass_chroma(y, sr, hop_length=hop_length)
-        print(f"[DEBUG] Bass chroma disabled for memory stability")
+        bass_chroma = compute_bass_chroma(y, sr, hop_length=hop_length)
         print(f"mem after bass chroma: {mem_mb():.1f} MB")
-        print(f"[DEBUG] Chroma shape: {chroma.shape}")
+        print(f"[DEBUG] Chroma shape: {chroma.shape}, Bass chroma shape: {bass_chroma.shape}")
         _progress(60) # Chroma done
 
         if chroma.shape[1] == 0:
@@ -1408,25 +1725,65 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
         # Improved: Use frame-based timing for more precise segment boundaries
         times = librosa.frames_to_time(np.arange(chroma.shape[1]), sr=sr, hop_length=hop_length)
 
-        # Calculate frame-aligned beat grid based on detected BPM
-        # 1 beat duration = 60 / BPM seconds
+        # Calculate beat duration for diagnostics
         beat_duration = 60.0 / bpm
-        # Use 2 beats per segment (1 bar in 4/4 time = 2 beats for half-bar segments)
         target_segment_duration = beat_duration * 2
-        frames_per_segment = int(target_segment_duration * sr / hop_length)
-
-        # Generate beat times with phase offset for bar alignment
         total_duration = librosa.frames_to_time(chroma.shape[1], sr=sr, hop_length=hop_length)
-        beat_times = np.arange(phase_offset_sec, total_duration + target_segment_duration, target_segment_duration)
-        num_segments = len(beat_times) - 1
 
-        print(f"[DEBUG] BPM: {bpm:.1f}, Beat duration: {beat_duration:.3f}s, Segment duration: {target_segment_duration:.3f}s")
-        print(f"[DEBUG] Frame-based timing: {frames_per_segment} frames/segment, {num_segments} segments")
+        # --- Adaptive Beat Tracking ---
+        # 固定BPMグリッドではテンポ揺らぎに追従できず累積ドリフトが発生する。
+        # librosa.beat.beat_track で実際のビート位置を検出し、セグメント境界に使用。
+        # forced_phase（後続チャンク）では安定性のため固定グリッドを維持。
+        if forced_phase is not None:
+            # 後続チャンク: 固定グリッドで一貫性を保つ
+            beat_times = np.arange(phase_offset_sec, total_duration + target_segment_duration, target_segment_duration)
+            beats_per_seg = 2
+            print(f"[DEBUG] Using fixed grid (forced_phase): seg_dur={target_segment_duration:.3f}s")
+        else:
+            # 初回チャンク: adaptive beat tracking
+            try:
+                bt_hop = 512
+                # onset_envは既存のものを再利用（BPM検出で使用済み、delete済みなら再計算）
+                try:
+                    _ = onset_env
+                except NameError:
+                    onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=bt_hop)
+
+                _, bt_frames = librosa.beat.beat_track(
+                    onset_envelope=onset_env, sr=sr, hop_length=bt_hop,
+                    bpm=bpm, trim=False
+                )
+                bt_times = librosa.frames_to_time(bt_frames, sr=sr, hop_length=bt_hop)
+
+                if len(bt_times) >= 4:
+                    # ビートトラッカー成功: 実際のビート位置を使用
+                    # beats_per_segment=4 で4ビート(1小節)ずつグループ化
+                    beat_times = bt_times
+                    beats_per_seg = 4
+                    avg_beat_interval = float(np.median(np.diff(bt_times)))
+                    print(f"[DEBUG] Adaptive beat tracking: {len(bt_times)} beats, "
+                          f"median interval={avg_beat_interval:.3f}s "
+                          f"(≈{60.0/avg_beat_interval:.1f} BPM)")
+                else:
+                    # ビートが少なすぎる → 固定グリッドにフォールバック
+                    beat_times = np.arange(phase_offset_sec, total_duration + target_segment_duration, target_segment_duration)
+                    beats_per_seg = 2
+                    print(f"[DEBUG] Beat tracker returned too few beats ({len(bt_times)}), using fixed grid")
+            except Exception as e:
+                # ビートトラッカーエラー → 固定グリッドにフォールバック
+                beat_times = np.arange(phase_offset_sec, total_duration + target_segment_duration, target_segment_duration)
+                beats_per_seg = 2
+                print(f"[DEBUG] Beat tracker failed ({e}), using fixed grid")
+
+        del onset_env  # メモリ解放
+
+        num_segments = max(1, len(beat_times) - 1)
+        print(f"[DEBUG] BPM: {bpm:.2f}, Beat duration: {beat_duration:.3f}s, Segments: ~{num_segments}")
 
         # 5. Aggregate per segment
         print("[DEBUG] Aggregating segments...")
-        main_matrix, segments = aggregate_chroma_per_segment(chroma, times, beat_times, beats_per_segment=2)
-        bass_matrix, _ = aggregate_chroma_per_segment(bass_chroma, times, beat_times, beats_per_segment=2)
+        main_matrix, segments = aggregate_chroma_per_segment(chroma, times, beat_times, beats_per_segment=beats_per_seg)
+        bass_matrix, _ = aggregate_chroma_per_segment(bass_chroma, times, beat_times, beats_per_segment=beats_per_seg)
         print(f"[DEBUG] Segments: {len(segments)}")
         _progress(75) # Aggregation done
 
@@ -1444,18 +1801,24 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
 
         # 8. Detection
         print("[DEBUG] Detecting chords...")
-        raw_chords = detect_chords_matrix(
+        raw_chords, final_last_chord, final_run_length = detect_chords_matrix(
             main_matrix,
             bass_matrix,
             penalty_mask=penalty_mask,
-            penalty_value=0.15,
-            main_weight=0.7,
-            bass_weight=0.3
+            penalty_value=0.20,   # 0.15→0.20: 非diatonicコードへのペナルティ強化
+            main_weight=0.6,      # 0.7→0.6: ベースクロマ復活に合わせて調整
+            bass_weight=0.35,     # 0.4→0.35: ベース過剰強調を緩和
+            forced_last_chord=forced_last_chord,
+            forced_run_length=forced_run_length,
         )
         print(f"[DEBUG] Raw chords detected: {len(raw_chords)}")
         _progress(90) # Detection done
 
-        smoothed_chords = smooth_chord_sequence(raw_chords)
+        # Use stagnation-aware smoothing to prevent creating long runs
+        smoothed_chords = smooth_chord_sequence_stagnation_aware(raw_chords, passes=2, max_run=6)
+
+        # Additional safety net: break any remaining long runs
+        smoothed_chords = break_long_stagnation_runs(smoothed_chords, max_consecutive=6)
 
         print(f"[DEBUG] unique chords: {len(set(smoothed_chords))}")
         print(f"[DEBUG] first 20 chords: {smoothed_chords[:20]}")
@@ -1505,6 +1868,8 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
             "key": estimated_key,
             "bars": bars,
             "phase_offset_sec": round(phase_offset_sec, 4),
+            "final_last_chord": final_last_chord,
+            "final_run_length": final_run_length,
         }
 
     except Exception as e:
@@ -1601,6 +1966,8 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
 
         all_bars: list[dict] = []
         key_votes: list[str] = []
+        stag_last_chord: str | None = None
+        stag_run_length: int | None = None
 
         chunk_idx = 0
         offset = 0.0
@@ -1639,7 +2006,9 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
                 offset_sec=offset,
                 duration_limit_sec=dur,
                 forced_bpm=bpm,  # 最初のチャンク以降はBPMを統一
-                forced_phase=forced_phase  # 最初のチャンク以降は位相を統一
+                forced_phase=forced_phase,  # 最初のチャンク以降は位相を統一
+                forced_last_chord=stag_last_chord,
+                forced_run_length=stag_run_length,
             )
 
             # Check for effective end of file (short read)
@@ -1647,6 +2016,8 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
 
             chunk_bars = raw["bars"]
             key_votes.append(raw.get("key", "Unknown"))
+            stag_last_chord = raw.get("final_last_chord")
+            stag_run_length = raw.get("final_run_length")
 
             # 最初のチャンクからBPMと位相を取得
             if bpm is None:
@@ -1695,8 +2066,12 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
             chunk_idx += 1
 
 
-        # key matches first chunk
-        key = key_votes[0] if key_votes else "Unknown"
+        # key matches majority vote across all chunks
+        if key_votes:
+            key_counter = Counter(key_votes)
+            key = key_counter.most_common(1)[0][0]
+        else:
+            key = "Unknown"
         # bpmがNoneのままの場合（チャンク0個）はフォールバック
         if bpm is None:
             bpm = 120.0
@@ -1710,21 +2085,17 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
                 analyzed_duration_sec=offset
             )
 
-        # チャンク結合後: 統一グリッドでタイミングを再計算
-        # 各チャンクが独立に位相検出するため、チャンク境界でタイミング不連続が発生する
-        # 全バーを単一BPMグリッドで上書きして連続性を保証する
-        if bpm is not None and len(all_bars) > 1:
-            seg_duration = (60.0 / bpm) * 4  # 4拍/バー (2 beat_times entries × 2 beats each)
-            first_start = all_bars[0].get("start_sec", 0.0)
-            print(f"[ChunkMerge] Unifying bar timing: {len(all_bars)} bars, seg={seg_duration:.4f}s, phase={first_start:.4f}s")
-            for i, bar in enumerate(all_bars):
-                bar["start_sec"] = round(first_start + i * seg_duration, 4)
-                bar["end_sec"] = round(first_start + (i + 1) * seg_duration, 4)
+        # チャンク結合後のタイミング:
+        # forced_phase によりチャンク間タイミングは連続（ギャップ < 1ms）
+        # 統一グリッド上書きは廃止: BPM誤差の蓄積ドリフトを防止し、
+        # per-chunkの精密なchromaフレーム境界タイミングを保持する
 
-        # 診断: 統一グリッド適用後のバー間隔を確認
+        # 診断: バー間隔を確認
         if len(all_bars) >= 2:
             _diag_dur = round(all_bars[1]["start_sec"] - all_bars[0]["start_sec"], 4)
-            print(f"[ChunkMerge] Final bar duration: {_diag_dur}s (expected {round((60.0/bpm)*4, 4)}s)")
+            _expected = round((60.0 / bpm) * 2, 4)  # 2拍/セグメント × beats_per_segment=2 = 4拍
+            print(f"[ChunkMerge] Bar duration: {_diag_dur}s (per-chunk timing, expected ~{_expected}s)")
+            print(f"[ChunkMerge] Total bars: {len(all_bars)}, first={all_bars[0]['start_sec']:.4f}s, last_end={all_bars[-1]['end_sec']:.4f}s")
 
         final_result = {
             "bpm": bpm,

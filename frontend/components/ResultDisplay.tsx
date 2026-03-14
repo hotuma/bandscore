@@ -1,7 +1,6 @@
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { AnalysisResult } from '../lib/api';
-import { setChordVolume } from '../lib/chordAudio';
-import { playChordFromTabWithSoundFont, getAudioContextTime, initAudioContext } from '../lib/guitarSound';
+import { playChordFromTabWithSoundFont, getAudioContextTime, initAudioContext, setGuitarSoundVolume, preloadGuitar } from '../lib/guitarSound';
 // import { analysisResultToTimedChords } from '../lib/chordTimeline'; // unused
 
 
@@ -29,14 +28,15 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
     const [chordVolume, setChordVolumeState] = useState<number>(0.8);
     const [showDebug, setShowDebug] = useState<boolean>(false);
 
-    // Automatically apply a small offset for remote (server-processed) audio
-    // This compensates for MP3 encoding/decoding latency differences between librosa and browser
+    // Preload guitar soundfont on mount
     useEffect(() => {
-        if (audioUrl && !audioUrl.startsWith('blob:')) {
-            setOffsetSec(0.2); // Start with +0.2s for URLs (found to be a good average for yt-dlp mp3s)
-        } else {
-            setOffsetSec(0);
-        }
+        preloadGuitar();
+    }, []);
+
+    // M4A直接配信により、librosaとブラウザが同一フォーマットをデコードするため
+    // 系統的なオフセット補償は不要。ユーザーは手動で微調整可能（±0.5sスライダー）
+    useEffect(() => {
+        setOffsetSec(0);
     }, [audioUrl]);
 
     // Track actual audio duration for accurate sync
@@ -377,7 +377,6 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
 
             playChordFromTabWithSoundFont(frets, {
                 durationSec: sustainSec,
-                gain: chordVolume
             }).catch((e) => {
                 console.error("Failed to play chord", e);
             });
@@ -562,7 +561,6 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                     const sustainSec = Math.min(1.8, Math.max(0.25, (barEndAudio - barStartAudio) * 0.95));
                     playChordFromTabWithSoundFont(frets, {
                         durationSec: sustainSec,
-                        gain: chordVolume,
                         whenSec,
                         strumSec: 0.012, // Reduced for tighter synchronization
                     }).then(() => {
@@ -581,7 +579,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
         return () => {
             stopScheduler();
         };
-    }, [autoChord, safeBars, chordVolume]); // Removed isPlaying to avoid churn, logic checks audio.paused directly
+    }, [autoChord, safeBars]); // Volume controlled via masterGain + ref, no need to restart scheduler
 
     // Auto-scroll effect
     useEffect(() => {
@@ -618,7 +616,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
 
     // Initialize Volume (side-effect)
     useEffect(() => {
-        setChordVolume(chordVolume);
+        setGuitarSoundVolume(chordVolume);
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleBarClick = (barIndex: number) => {
@@ -630,7 +628,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
 
         // Play chord sound
         if (frets) {
-            playChordFromTabWithSoundFont(frets, { gain: chordVolume }).catch((e) => {
+            playChordFromTabWithSoundFont(frets).catch((e) => {
                 console.error("Failed to play chord", e);
             });
         }
@@ -710,13 +708,13 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                             <input
                                 type="range"
                                 min={0}
-                                max={1}
+                                max={3}
                                 step={0.01}
                                 value={chordVolume}
                                 onChange={(e) => {
                                     const v = Number(e.target.value);
                                     setChordVolumeState(v);
-                                    setChordVolume(v);
+                                    setGuitarSoundVolume(v);
                                 }}
                                 className="w-20"
                             />
@@ -729,12 +727,12 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                         <div className="flex items-center gap-3">
                             <span className="font-medium">Offset:</span>
                             <button
-                                onClick={() => setOffsetSec(prev => Math.max(-0.5, Number((prev - 0.1).toFixed(1))))}
+                                onClick={() => setOffsetSec(prev => Math.max(-2.0, Number((prev - 0.1).toFixed(1))))}
                                 className="w-6 h-6 flex items-center justify-center bg-white border border-gray-300 rounded hover:bg-gray-50 font-mono"
                             >-</button>
                             <span className="font-mono w-12 text-center">{`${offsetSec > 0 ? '+' : ''}${offsetSec.toFixed(1)}s`}</span>
                             <button
-                                onClick={() => setOffsetSec(prev => Math.min(0.5, Number((prev + 0.1).toFixed(1))))}
+                                onClick={() => setOffsetSec(prev => Math.min(2.0, Number((prev + 0.1).toFixed(1))))}
                                 className="w-6 h-6 flex items-center justify-center bg-white border border-gray-300 rounded hover:bg-gray-50 font-mono"
                             >+</button>
                         </div>

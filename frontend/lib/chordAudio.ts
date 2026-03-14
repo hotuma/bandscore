@@ -32,7 +32,7 @@ export function setChordVolume(volume: number) {
     const ctx = getAudioContext();
     if (!ctx || !masterGain) return;
 
-    const v = Math.max(0, Math.min(1, volume));
+    const v = Math.max(0, Math.min(3, volume));
     masterGain.gain.setTargetAtTime(v, ctx.currentTime, 0.01);
 }
 
