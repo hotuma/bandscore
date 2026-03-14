@@ -38,12 +38,13 @@ if len(bars) >= 2:
     bar1_end = float(bars[1]["end_sec"])
 
     bar_duration = bar1_start - bar0_start
-    expected_duration = (60.0 / bpm) * 4  # 4 beats per bar
+    beats_per_seg = result.get("beats_per_segment", 2)
+    expected_duration = (60.0 / bpm) * beats_per_seg
 
     print(f"Bar 0: {bar0_start:.4f} - {bar0_end:.4f}")
     print(f"Bar 1: {bar1_start:.4f} - {bar1_end:.4f}")
     print(f"Bar duration: {bar_duration:.4f}s")
-    print(f"Expected (4 beats @ BPM {bpm}): {expected_duration:.4f}s")
+    print(f"Expected ({beats_per_seg} beats @ BPM {bpm}): {expected_duration:.4f}s")
 
     if abs(bar_duration - expected_duration) < 0.01:
         print("PASS: Bar duration matches expected!")
@@ -68,6 +69,7 @@ FIRST_CHUNK_SEC = 60.0
 all_bars = []
 bpm = None
 segment_duration = None
+beats_per_seg = None
 chunk_idx = 0
 offset = 0.0
 
@@ -90,9 +92,10 @@ while offset < MAX_ANALYSIS_SEC:
 
     if bpm is None:
         bpm = raw.get("bpm", 120.0)
+        beats_per_seg = raw.get("beats_per_segment", 2)
         seconds_per_beat = 60.0 / bpm
-        segment_duration = seconds_per_beat * 2
-        print(f"  Detected BPM: {bpm:.1f}")
+        segment_duration = seconds_per_beat * beats_per_seg
+        print(f"  Detected BPM: {bpm:.1f}, beats_per_seg: {beats_per_seg}")
 
     if len(chunk_bars) >= 2:
         d = float(chunk_bars[1]["start_sec"]) - float(chunk_bars[0]["start_sec"])
@@ -139,9 +142,10 @@ if len(all_bars) >= 2:
 
 # Apply unified grid
 if bpm is not None and len(all_bars) > 1:
-    seg_duration = (60.0 / bpm) * 4
+    beats_used = beats_per_seg if beats_per_seg is not None else 2
+    seg_duration = (60.0 / bpm) * beats_used
     first_start = all_bars[0].get("start_sec", 0.0)
-    print(f"\nApplying unified grid: seg={seg_duration:.4f}s, phase={first_start:.4f}s")
+    print(f"\nApplying unified grid: seg={seg_duration:.4f}s, phase={first_start:.4f}s, beats={beats_used}")
     for i, bar in enumerate(all_bars):
         bar["start_sec"] = round(first_start + i * seg_duration, 4)
         bar["end_sec"] = round(first_start + (i + 1) * seg_duration, 4)
@@ -153,7 +157,8 @@ if len(all_bars) >= 2:
     print(f"First bar start: {all_bars[0]['start_sec']:.4f}")
     print(f"Last bar end: {all_bars[-1]['end_sec']:.4f}")
 
-    expected = (60.0 / bpm) * 4
+    beats_used = beats_per_seg if beats_per_seg is not None else 2
+    expected = (60.0 / bpm) * beats_used
     if abs(d - expected) < 0.01:
         print(f"PASS: Unified grid bar duration = {d:.4f}s (expected {expected:.4f}s)")
     else:

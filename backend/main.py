@@ -215,6 +215,20 @@ def _parse_time_signature(ts: str) -> Tuple[int, int]:
         # fallback: assume 4/4
         return 4, 4
 
+def compute_time_signature(beats_per_segment: int) -> str:
+    """
+    Compute time signature from beats per segment.
+
+    Args:
+        beats_per_segment: Number of beats per analysis segment (2 or 4)
+
+    Returns:
+        Time signature string (e.g., "2/4" for 2 beats, "4/4" for 4 beats)
+    """
+    if beats_per_segment <= 0:
+        return "4/4"  # Safe default
+    return f"{beats_per_segment}/4"
+
 def add_bar_timing(
     bars: List[Dict[str, Any]],
     bpm: float | int | None,
@@ -919,11 +933,26 @@ def break_long_stagnation_runs(chords: list[str], max_consecutive: int = 6) -> l
         chords: Input chord sequence
         max_consecutive: Maximum allowed consecutive bars before breaking
     """
+    import sys
+
+    # デバッグログをファイルに出力
+    with open('debug_stagnation.log', 'a', encoding='utf-8') as f:
+        f.write(f"\n=== break_long_stagnation_runs called ===\n")
+        f.write(f"Input: {len(chords)} chords, max_consecutive={max_consecutive}\n")
+    sys.stdout.flush()
+
+    print(f"[STAGNATION-DEBUG] Function called with {len(chords)} chords")
+
     if len(chords) <= max_consecutive:
+        with open('debug_stagnation.log', 'a', encoding='utf-8') as f:
+            f.write(f"SKIP: len(chords)={len(chords)} <= max_consecutive={max_consecutive}\n")
         return chords[:]
 
     result = chords[:]
     i = 0
+
+    with open('debug_stagnation.log', 'a', encoding='utf-8') as f:
+        f.write(f"Starting loop...\n")
 
     while i < len(result):
         # Count consecutive run
@@ -933,7 +962,13 @@ def break_long_stagnation_runs(chords: list[str], max_consecutive: int = 6) -> l
 
         run_length = j - i
 
+        # ログを追加
+        with open('debug_stagnation.log', 'a', encoding='utf-8') as f:
+            f.write(f"Position {i}: chord={result[i]}, run_length={run_length}\n")
+
         if run_length > max_consecutive:
+            with open('debug_stagnation.log', 'a', encoding='utf-8') as f:
+                f.write(f"  LONG RUN DETECTED: {result[i]} × {run_length} bars at position {i}-{j-1}\n")
             # Found a long run - insert breaks
             # Strategy: Every max_consecutive bars, insert a 1-bar variation
             # Use the previous or next different chord if available
@@ -1453,6 +1488,7 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
 
         octave_factor = 1.0  # オクターブ補正時に更新される
         phase_detect_bpm = None  # 位相検出用のBPM（オクターブ補正前）
+        beats_per_seg = 2  # Default to 2 beats per segment (fallback grid)
 
         if forced_bpm is not None:
             bpm = forced_bpm
@@ -1736,7 +1772,8 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
         # forced_phase（後続チャンク）では安定性のため固定グリッドを維持。
         if forced_phase is not None:
             # 後続チャンク: 固定グリッドで一貫性を保つ
-            beat_times = np.arange(phase_offset_sec, total_duration + target_segment_duration, target_segment_duration)
+            # beat_timesは1拍間隔で生成（aggregate_chroma_per_segmentがbeats_per_segmentでグループ化するため）
+            beat_times = np.arange(phase_offset_sec, total_duration + target_segment_duration, beat_duration)
             beats_per_seg = 2
             print(f"[DEBUG] Using fixed grid (forced_phase): seg_dur={target_segment_duration:.3f}s")
         else:
@@ -1766,12 +1803,14 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
                           f"(≈{60.0/avg_beat_interval:.1f} BPM)")
                 else:
                     # ビートが少なすぎる → 固定グリッドにフォールバック
-                    beat_times = np.arange(phase_offset_sec, total_duration + target_segment_duration, target_segment_duration)
+                    # beat_timesは1拍間隔で生成（aggregate_chroma_per_segmentがbeats_per_segmentでグループ化するため）
+                    beat_times = np.arange(phase_offset_sec, total_duration + target_segment_duration, beat_duration)
                     beats_per_seg = 2
                     print(f"[DEBUG] Beat tracker returned too few beats ({len(bt_times)}), using fixed grid")
             except Exception as e:
                 # ビートトラッカーエラー → 固定グリッドにフォールバック
-                beat_times = np.arange(phase_offset_sec, total_duration + target_segment_duration, target_segment_duration)
+                # beat_timesは1拍間隔で生成（aggregate_chroma_per_segmentがbeats_per_segmentでグループ化するため）
+                beat_times = np.arange(phase_offset_sec, total_duration + target_segment_duration, beat_duration)
                 beats_per_seg = 2
                 print(f"[DEBUG] Beat tracker failed ({e}), using fixed grid")
 
@@ -1814,11 +1853,33 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
         print(f"[DEBUG] Raw chords detected: {len(raw_chords)}")
         _progress(90) # Detection done
 
+        # 最大停滞を計算するヘルパー関数
+        def calc_max_run(chords):
+            max_run = 1
+            current_run = 1
+            for i in range(1, len(chords)):
+                if chords[i] == chords[i-1]:
+                    current_run += 1
+                    max_run = max(max_run, current_run)
+                else:
+                    current_run = 1
+            return max_run
+
+        # 各処理段階の最大停滞を追跡
+        raw_max = calc_max_run(raw_chords)
+        print(f"[DEBUG] Raw chords max stagnation: {raw_max} bars")
+
         # Use stagnation-aware smoothing to prevent creating long runs
         smoothed_chords = smooth_chord_sequence_stagnation_aware(raw_chords, passes=2, max_run=6)
 
+        smoothed_max = calc_max_run(smoothed_chords)
+        print(f"[DEBUG] After stagnation-aware smoothing: {smoothed_max} bars")
+
         # Additional safety net: break any remaining long runs
         smoothed_chords = break_long_stagnation_runs(smoothed_chords, max_consecutive=6)
+
+        final_max = calc_max_run(smoothed_chords)
+        print(f"[DEBUG] After break_long_stagnation_runs: {final_max} bars")
 
         print(f"[DEBUG] unique chords: {len(set(smoothed_chords))}")
         print(f"[DEBUG] first 20 chords: {smoothed_chords[:20]}")
@@ -1864,12 +1925,13 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
         return {
             "bpm": bpm,
             "duration_sec": round(duration_sec, 1),
-            "time_signature": "2/4",
+            "time_signature": compute_time_signature(beats_per_seg),
             "key": estimated_key,
             "bars": bars,
             "phase_offset_sec": round(phase_offset_sec, 4),
             "final_last_chord": final_last_chord,
             "final_run_length": final_run_length,
+            "beats_per_segment": beats_per_seg,
         }
 
     except Exception as e:
@@ -1963,6 +2025,7 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
         bpm = None  # 最初のチャンクで検出されたBPMを使用
         forced_phase = None  # 最初のチャンクで検出された位相を使用(チャンク統一)
         segment_duration = None  # BPM検出後に計算
+        beats_per_seg = None  # Track beats_per_segment from first chunk
 
         all_bars: list[dict] = []
         key_votes: list[str] = []
@@ -2023,9 +2086,11 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
             if bpm is None:
                 bpm = raw.get("bpm", 120.0)
                 forced_phase = raw.get("phase_offset_sec", 0.0)  # 位相も保存
+                beats_per_seg = raw.get("beats_per_segment", 2)  # Extract beats_per_segment
                 seconds_per_beat = 60.0 / bpm
-                segment_duration = seconds_per_beat * 2
-                print(f"[ChunkMerge] Using detected BPM: {bpm:.1f}, phase: {forced_phase*1000:.1f}ms, segment_duration: {segment_duration:.3f}s")
+                segment_duration = seconds_per_beat * beats_per_seg
+                print(f"[ChunkMerge] Using detected BPM: {bpm:.1f}, phase: {forced_phase*1000:.1f}ms, "
+                      f"beats_per_seg: {beats_per_seg}, segment_duration: {segment_duration:.3f}s")
 
             for i, bar in enumerate(chunk_bars):
                 # チャンクのbar配列からstart_sec/end_secを直接取得（オフセット加算）
@@ -2078,10 +2143,11 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
 
         # barにstart_secが既にある場合はadd_bar_timingをスキップ
         if all_bars and "start_sec" not in all_bars[0]:
+            time_sig = compute_time_signature(beats_per_seg) if beats_per_seg is not None else "4/4"
             all_bars = add_bar_timing(
                 all_bars,
                 bpm=bpm,
-                time_signature="2/4",
+                time_signature=time_sig,
                 analyzed_duration_sec=offset
             )
 
@@ -2093,14 +2159,15 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
         # 診断: バー間隔を確認
         if len(all_bars) >= 2:
             _diag_dur = round(all_bars[1]["start_sec"] - all_bars[0]["start_sec"], 4)
-            _expected = round((60.0 / bpm) * 2, 4)  # 2拍/セグメント × beats_per_segment=2 = 4拍
-            print(f"[ChunkMerge] Bar duration: {_diag_dur}s (per-chunk timing, expected ~{_expected}s)")
+            beats_used = beats_per_seg if beats_per_seg is not None else 2
+            _expected = round((60.0 / bpm) * beats_used, 4)
+            print(f"[ChunkMerge] Bar duration: {_diag_dur}s (per-chunk timing, expected ~{_expected}s @ {beats_used} beats/segment)")
             print(f"[ChunkMerge] Total bars: {len(all_bars)}, first={all_bars[0]['start_sec']:.4f}s, last_end={all_bars[-1]['end_sec']:.4f}s")
 
         final_result = {
             "bpm": bpm,
             "duration_sec": round(offset, 1),
-            "time_signature": "2/4",
+            "time_signature": compute_time_signature(beats_per_seg) if beats_per_seg is not None else "4/4",
             "key": key,
             # Strict Return Schema based on Mode
             "mode": mode,
