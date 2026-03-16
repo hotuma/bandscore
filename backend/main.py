@@ -524,7 +524,7 @@ def detect_chords_matrix(
     flux_threshold: float = 0.15,
     high_flux_threshold: float = 0.35,
     max_repeat_segments: int = 4,         # Lowered to 4 (approx 4s) for stricter UX [Iteration 2]
-    min_hold_segments: int = 2,
+    min_hold_segments: int = 1,
     same_chord_penalty: float = 0.20,
     long_stag_penalty: float = 0.85,      # Increased from 0.60 to 0.85 [Iteration 2]
     topk: int = 3,
@@ -1871,13 +1871,13 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
         print(f"[DEBUG] Raw chords max stagnation: {raw_max} bars")
 
         # Use stagnation-aware smoothing to prevent creating long runs
-        smoothed_chords = smooth_chord_sequence_stagnation_aware(raw_chords, passes=2, max_run=6)
+        smoothed_chords = smooth_chord_sequence_stagnation_aware(raw_chords, passes=2, max_run=4)
 
         smoothed_max = calc_max_run(smoothed_chords)
         print(f"[DEBUG] After stagnation-aware smoothing: {smoothed_max} bars")
 
         # Additional safety net: break any remaining long runs
-        smoothed_chords = break_long_stagnation_runs(smoothed_chords, max_consecutive=6)
+        smoothed_chords = break_long_stagnation_runs(smoothed_chords, max_consecutive=4)
 
         final_max = calc_max_run(smoothed_chords)
         print(f"[DEBUG] After break_long_stagnation_runs: {final_max} bars")

@@ -11,7 +11,7 @@ interface ResultDisplayProps {
 
 export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) {
     const audioRef = useRef<HTMLAudioElement>(null);
-    const [currentBarIndex, setCurrentBarIndex] = useState<number>(-1);
+    const currentBarIndexRef = useRef<number>(-1);
     // UI State
     const [isPlaying, setIsPlaying] = useState(false);
     // Refs
@@ -416,27 +416,41 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
 
                     const uiIndex = findBarIndexByTime(effectiveTime, safeBars);
 
-                    // --- Update UI using uiIndex (Visuals) ---
-                    setCurrentBarIndex(prev => {
-                        if (prev !== uiIndex) {
-                            // デバッグログ: ハイライト切り替え時のタイミング情報
-                            const bar = safeBars[uiIndex];
-                            const barStart = Number(bar?.start_sec ?? 0);
-                            const lag = effectiveTime - barStart;
-                            console.log("[RAF Highlight]", {
-                                currentTime: currentTime.toFixed(3),
-                                effectiveTime: effectiveTime.toFixed(3),
-                                offsetSec: offsetSec.toFixed(3),
-                                barIndex: uiIndex,
-                                barStart: barStart.toFixed(3),
-                                barEnd: bar?.end_sec?.toFixed(3) ?? "N/A",
-                                chord: bar?.chord ?? "N/A",
-                                lag: lag.toFixed(3)
-                            });
-                            return uiIndex;
+                    // --- Update UI using uiIndex (Visuals) - DOM Direct Manipulation ---
+                    if (currentBarIndexRef.current !== uiIndex) {
+                        // 前のハイライトを削除
+                        const prevIndex = currentBarIndexRef.current;
+                        if (prevIndex >= 0) {
+                            const prevElGrid = document.querySelector(`[data-bar-index="${prevIndex}"].bar-grid-item`);
+                            const prevElCard = barRefs.current[prevIndex];
+                            prevElGrid?.classList.remove('bar-highlighted');
+                            prevElCard?.classList.remove('bar-highlighted');
                         }
-                        return prev;
-                    });
+
+                        // 新しいハイライトを追加
+                        const newElGrid = document.querySelector(`[data-bar-index="${uiIndex}"].bar-grid-item`);
+                        const newElCard = barRefs.current[uiIndex];
+                        newElGrid?.classList.add('bar-highlighted');
+                        newElCard?.classList.add('bar-highlighted');
+
+                        currentBarIndexRef.current = uiIndex;
+
+                        // オートスクロール（必要時のみ）
+                        if (autoScroll && newElCard) {
+                            newElCard.scrollIntoView({
+                                behavior: 'auto',  // smooth → auto
+                                block: 'center',
+                                inline: 'center'
+                            });
+                        }
+
+                        // デバッグログ
+                        const bar = safeBars[uiIndex];
+                        console.log("[RAF Highlight]", {
+                            uiIndex,
+                            chord: bar?.chord ?? "N/A"
+                        });
+                    }
                 }
             } catch (e) {
                 console.error("ResultDisplay RAF loop error:", e);
@@ -581,22 +595,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
         };
     }, [autoChord, safeBars]); // Volume controlled via masterGain + ref, no need to restart scheduler
 
-    // Auto-scroll effect
-    useEffect(() => {
-        const now = Date.now();
-        if (
-            autoScroll &&
-            currentBarIndex >= 0 &&
-            barRefs.current[currentBarIndex] &&
-            now > suppressScrollRef.current
-        ) {
-            barRefs.current[currentBarIndex]?.scrollIntoView({
-                behavior: 'smooth',
-                block: 'center',
-                inline: 'center'
-            });
-        }
-    }, [currentBarIndex, autoScroll]);
+    // Auto-scroll is now handled directly in RAF loop
 
     // Handle user scroll to suppress auto-scroll temporarily
     useEffect(() => {
@@ -653,6 +652,16 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
 
             // Sync internal state immediately
             resetAnchor();
+
+            // DOM直接更新: ハイライトを即座に変更
+            const prevIndex = currentBarIndexRef.current;
+            if (prevIndex >= 0) {
+                document.querySelector(`[data-bar-index="${prevIndex}"].bar-grid-item`)?.classList.remove('bar-highlighted');
+                barRefs.current[prevIndex]?.classList.remove('bar-highlighted');
+            }
+            document.querySelector(`[data-bar-index="${barIndex}"].bar-grid-item`)?.classList.add('bar-highlighted');
+            barRefs.current[barIndex]?.classList.add('bar-highlighted');
+            currentBarIndexRef.current = barIndex;
 
             // Explicitly set scheduling to the clicked bar
             schedulingBarRef.current = barIndex;
@@ -783,14 +792,12 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                     {safeBars.map((bar, index) => (
                         <div
                             key={`${index}-${bar.bar}-${bar.chord}`}
+                            data-bar-index={index}
                             onClick={() => handleBarClick(index)}
-                            className={`flex flex-col items-center p-2 rounded border cursor-pointer transition-colors duration-200 ${index === currentBarIndex
-                                ? 'bg-blue-600 border-blue-600 text-white shadow-md scale-110 transform z-10'
-                                : 'bg-gray-50 border-gray-100 hover:bg-gray-100'
-                                }`}
+                            className="bar-grid-item flex flex-col items-center p-2 rounded border cursor-pointer transition-colors duration-200 bg-gray-50 border-gray-100 hover:bg-gray-100"
                         >
-                            <span className={`text-[10px] mb-1 ${index === currentBarIndex ? 'text-blue-100' : 'text-gray-400'}`}>{bar.bar}</span>
-                            <span className={`font-bold text-sm sm:text-base ${index === currentBarIndex ? 'text-white' : 'text-gray-700'}`} translate="no">{bar.chord}</span>
+                            <span className="bar-number text-[10px] mb-1 text-gray-400">{bar.bar}</span>
+                            <span className="bar-chord font-bold text-sm sm:text-base text-gray-700" translate="no">{bar.chord}</span>
                         </div>
                     ))}
                 </div>
@@ -804,23 +811,17 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                         <div
                             key={`${index}-${bar.bar}-${bar.chord}`}
                             ref={el => { barRefs.current[index] = el; }}
+                            data-bar-index={index}
                             onClick={() => handleBarClick(index)}
-                            className={`rounded-xl border shadow-sm overflow-hidden transition-all duration-200 cursor-pointer ${index === currentBarIndex
-                                ? 'border-blue-500 ring-2 ring-blue-200 shadow-lg transform scale-[1.02]'
-                                : 'bg-white border-gray-200 hover:shadow-md'
-                                }`}
+                            className="bar-card-item rounded-xl border shadow-sm overflow-hidden transition-all duration-200 cursor-pointer bg-white border-gray-200 hover:shadow-md"
                         >
-                            <div className={`px-4 py-2 border-b flex justify-between items-center ${index === currentBarIndex ? 'bg-blue-50 border-blue-100' : 'bg-gray-50 border-gray-100'
-                                }`}>
-                                <span className={`text-xs font-bold ${index === currentBarIndex ? 'text-blue-600' : 'text-gray-500'}`}>Bar {bar.bar}</span>
-                                <span className={`text-lg font-black ${index === currentBarIndex ? 'text-blue-700' : 'text-blue-600'}`} translate="no">{bar.chord}</span>
+                            <div className="bar-card-header px-4 py-2 border-b flex justify-between items-center bg-gray-50 border-gray-100">
+                                <span className="bar-card-bar-number text-xs font-bold text-gray-500">Bar {bar.bar}</span>
+                                <span className="bar-card-chord text-lg font-black text-blue-600" translate="no">{bar.chord}</span>
                             </div>
-                            <div className={`p-4 flex justify-center ${index === currentBarIndex ? 'bg-blue-50/30' : 'bg-white'}`}>
+                            <div className="bar-card-content p-4 flex justify-center bg-white">
                                 {bar.tab ? (
-                                    <div className={`font-mono text-sm leading-relaxed p-3 rounded border inline-block ${index === currentBarIndex
-                                        ? 'bg-white border-blue-200 text-gray-800'
-                                        : 'bg-gray-50 border-gray-100 text-gray-600'
-                                        }`}>
+                                    <div className="bar-card-tab font-mono text-sm leading-relaxed p-3 rounded border inline-block bg-gray-50 border-gray-100 text-gray-600">
                                         <div className="flex gap-2">
                                             <span className="text-gray-400 select-none">e|</span>
                                             <span className="font-bold">{bar.tab.frets[5] === 'x' ? 'x' : bar.tab.frets[5]}</span>

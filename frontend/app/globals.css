@@ -24,3 +24,54 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* ===== Guitar Tab Highlight Optimization ===== */
+/* Grid Item Highlight - Performance optimized with will-change */
+.bar-grid-item.bar-highlighted {
+  background-color: rgb(37, 99, 235);
+  border-color: rgb(37, 99, 235);
+  color: white;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  transform: scale(1.1);
+  z-index: 10;
+  will-change: transform, background-color;
+}
+
+.bar-grid-item.bar-highlighted .bar-number {
+  color: rgb(219, 234, 254);
+}
+
+.bar-grid-item.bar-highlighted .bar-chord {
+  color: white;
+}
+
+/* Card Item Highlight - Performance optimized with will-change */
+.bar-card-item.bar-highlighted {
+  border-color: rgb(59, 130, 246);
+  box-shadow: 0 0 0 2px rgb(191, 219, 254), 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  transform: scale(1.02);
+  will-change: transform, box-shadow;
+}
+
+.bar-card-item.bar-highlighted .bar-card-header {
+  background-color: rgb(239, 246, 255);
+  border-color: rgb(191, 219, 254);
+}
+
+.bar-card-item.bar-highlighted .bar-card-bar-number {
+  color: rgb(37, 99, 235);
+}
+
+.bar-card-item.bar-highlighted .bar-card-chord {
+  color: rgb(29, 78, 216);
+}
+
+.bar-card-item.bar-highlighted .bar-card-content {
+  background-color: rgba(239, 246, 255, 0.3);
+}
+
+.bar-card-item.bar-highlighted .bar-card-tab {
+  background-color: white;
+  border-color: rgb(191, 219, 254);
+  color: rgb(31, 41, 55);
+}

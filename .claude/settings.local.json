@@ -33,7 +33,10 @@
       "Bash(\".venv\\\\Scripts\\\\pip.exe\" install --upgrade yt-dlp)",
       "Bash(npm run build:*)",
       "Bash(python tests/verify_chord_accuracy.py:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(python3 -c \":*)",
+      "Bash(jq '.bars[:40] | .[] | \"\"\\\\\\(.bar\\) | \\\\\\(.chord\\) | start: \\\\\\(.start_sec\\) | end: \\\\\\(.end_sec\\) | dur: \\\\\\(.end_sec - .start_sec\\)\"\"' analysis-1773694032609.json)",
+      "Bash(python3:*)"
     ],
     "deny": [],
     "ask": []
