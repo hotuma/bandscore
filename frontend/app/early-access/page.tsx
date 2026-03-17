@@ -324,36 +324,66 @@ export default function EarlyAccessPage() {
         setProgress(0);
         setError(null);
 
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('mode', 'EARLY_ACCESS');
-
         try {
+            // Mobile/iCloud optimization: pre-read to ensure file is fully local before POST
+            const buffer = await file.arrayBuffer();
+            console.log("[upload] preloaded bytes", buffer.byteLength);
+            const safeFile = new File([buffer], file.name, {
+                type: file.type || 'audio/mpeg',
+                lastModified: file.lastModified,
+            });
+
+            const formData = new FormData();
+            formData.append('file', safeFile);
+            formData.append('mode', 'EARLY_ACCESS');
+
             // Connect to Backend
             const base = process.env.NEXT_PUBLIC_API_BASE_URL;
             const url = `${base}/analyze`;
             const submittedAt = Date.now();
             console.log("Submitting job to:", url);
 
-            const res = await fetch(url, {
-                method: 'POST',
-                body: formData,
-                signal: controller.signal
-            });
+            // INIT auto-retry (avoid user churn on transient failures)
+            const MAX_INIT_RETRY = 3;
+            let lastErr: any = null;
+            let job_id: string | null = null;
 
-            if (!res.ok) {
-                // Handle immediate errors (validation etc)
-                let errorData;
-                try { errorData = await res.json(); } catch (e) { }
+            for (let attempt = 1; attempt <= MAX_INIT_RETRY; attempt++) {
+                try {
+                    console.log(`[upload] start attempt ${attempt}`);
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        body: formData,
+                        signal: controller.signal
+                    });
 
-                if (errorData?.detail?.error) {
-                    throw errorData.detail.error;
-                } else {
-                    throw { code: 'HTTP_ERROR', message: `Status ${res.status}` };
+                    if (!res.ok) {
+                        let errorData;
+                        try { errorData = await res.json(); } catch (e) { }
+                        if (errorData?.detail?.error) {
+                            throw errorData.detail.error;
+                        } else {
+                            throw { code: 'HTTP_ERROR', message: `Status ${res.status}` };
+                        }
+                    }
+
+                    const data = await res.json();
+                    job_id = data.job_id;
+                    if (!job_id) throw new Error("No Job ID returned");
+                    break; // success
+                } catch (e: any) {
+                    if (e.name === "AbortError") throw e;
+                    console.warn(`Init attempt ${attempt} failed:`, e);
+                    lastErr = e;
+                    if (attempt < MAX_INIT_RETRY) {
+                        const delayMs = 800 * Math.pow(2, attempt - 1);
+                        await new Promise(r => setTimeout(r, delayMs));
+                    }
                 }
             }
 
-            const { job_id } = await res.json();
+            if (!job_id) throw lastErr || new Error("INIT_FAILED");
+
             console.log("Job started:", job_id);
 
             // Start Polling

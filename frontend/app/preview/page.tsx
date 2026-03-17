@@ -1,12 +1,14 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+
 import { Loader2 } from 'lucide-react';
 import { AnalysisResult, analyzeAudio } from "../../lib/api";
 import ResultDisplay from "../../components/ResultDisplay";
+import { extractVideoId } from "../../lib/youtube";
 
-type AppStatus = 'idle' | 'uploading' | 'analyzing' | 'ready' | 'error';
+type AppStatus = 'idle' | 'uploading' | 'downloading' | 'analyzing' | 'ready' | 'error';
+type InputMode = 'file' | 'url';
 type ErrorState = {
     code: string;
     message: string;
@@ -16,7 +18,8 @@ export default function PreviewPage() {
     useEffect(() => {
         console.log("PREVIEW PAGE LOADED - NEW VERSION", { updated: new Date().toISOString() });
     }, []);
-    const router = useRouter();
+    const [inputMode, setInputMode] = useState<InputMode>('file');
+    const [youtubeUrl, setYoutubeUrl] = useState('');
     const [file, setFile] = useState<File | null>(null);
     const [audioUrl, setAudioUrl] = useState<string | null>(null);
     const [result, setResult] = useState<AnalysisResult | null>(null);
@@ -29,7 +32,7 @@ export default function PreviewPage() {
 
     useEffect(() => {
         return () => {
-            if (audioUrl) URL.revokeObjectURL(audioUrl);
+            if (audioUrl && audioUrl.startsWith('blob:')) URL.revokeObjectURL(audioUrl);
         };
     }, [audioUrl]);
 
@@ -50,10 +53,9 @@ export default function PreviewPage() {
         }
     };
 
-    const pollJob = async (jobId: string, signal: AbortSignal, submittedAt: number) => {
+    const pollJob = async (jobId: string, signal: AbortSignal) => {
         const base = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
         let lastProgress = -1;
-        let lastUpdateTime = Date.now();
         let fetchFailCount = 0;
         const STALL_SEC = 60;
         const MAX_FETCH_FAIL = 5;
@@ -76,7 +78,6 @@ export default function PreviewPage() {
 
                 if (p !== lastProgress) {
                     lastProgress = p;
-                    lastUpdateTime = Date.now();
                 }
 
                 // Watchdog: heartbeat check (more robust than progress)
@@ -101,6 +102,14 @@ export default function PreviewPage() {
                     const resultData: AnalysisResult = await r.json();
                     console.log("ANALYZE RESULT", resultData);
                     fetchFailCount = 0; // complete success
+                    // audio_url 正規化（YouTube解析時にバックエンドURLを絶対URLへ変換）
+                    if (resultData.audio_url) {
+                        const normalized = resultData.audio_url.startsWith('http')
+                            ? resultData.audio_url
+                            : `${base}${resultData.audio_url}`;
+                        setAudioUrl(normalized);
+                    }
+                    setProgress(100);
                     setResult(resultData);
                     setStatus('ready');
                     return;
@@ -185,7 +194,7 @@ export default function PreviewPage() {
             if (!response?.job_id) throw lastErr || new Error("INIT_FAILED");
 
             if (response.job_id) {
-                pollJob(response.job_id, controller.signal, Date.now());
+                pollJob(response.job_id, controller.signal);
             } else {
                 throw new Error("No Job ID returned");
             }
@@ -196,6 +205,65 @@ export default function PreviewPage() {
                 code: err.code || 'INIT_FAILED',
                 message: err.message || 'Failed to start analysis.'
             });
+            setStatus('error');
+        }
+    };
+
+    const handleAnalyzeUrl = async () => {
+        const trimmed = youtubeUrl.trim();
+        if (!trimmed) return;
+
+        const videoId = extractVideoId(trimmed);
+        if (!videoId) {
+            setError({ code: 'INVALID_URL', message: 'Invalid YouTube URL. Use https://www.youtube.com/watch?v=... format.' });
+            return;
+        }
+
+        if (abortPollingRef.current) abortPollingRef.current.abort();
+        const controller = new AbortController();
+        abortPollingRef.current = controller;
+
+        setStatus('downloading');
+        setProgress(0);
+        setError(null);
+        setResult(null);
+        setAudioUrl(null);
+
+        try {
+            const base = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
+            const formData = new FormData();
+            formData.append('url', trimmed);
+            const res = await fetch(`${base}/analyze/url/preview`, {
+                method: 'POST',
+                body: formData,
+                signal: controller.signal,
+            });
+
+            if (!res.ok) {
+                const errorData = await res.json().catch(() => ({}));
+                const msg = errorData.detail || `Status ${res.status}`;
+                if (res.status === 429 || msg.includes("429") || msg.includes("Rate Limit")) {
+                    throw { code: 'YOUTUBE_RATE_LIMIT', message: 'YouTube rate limit reached. Please try again in a few minutes.' };
+                } else if (res.status === 403 || msg.includes("403") || msg.includes("Access Denied")) {
+                    throw { code: 'YOUTUBE_ACCESS_DENIED', message: 'Cannot access this video. Try another video or upload an MP3 file instead.' };
+                }
+                throw { code: `HTTP_${res.status}`, message: msg };
+            }
+
+            const { job_id } = await res.json();
+            console.log("URL preview job started:", job_id);
+
+            setStatus('analyzing');
+            pollJob(job_id, controller.signal);
+
+        } catch (err: any) {
+            if (err.name === "AbortError") return;
+            console.error('URL submission failed:', err);
+            if (err.code && err.message) {
+                setError(err);
+            } else {
+                setError({ code: 'SUBMISSION_FAILED', message: err.message || 'Failed to start URL analysis.' });
+            }
             setStatus('error');
         }
     };
@@ -218,7 +286,36 @@ export default function PreviewPage() {
                     </p>
                 </header>
 
+                {/* INPUT MODE TABS */}
+                <div className="flex border-b border-neutral-800">
+                    <button
+                        onClick={() => {
+                            if (inputMode === 'url') {
+                                setInputMode('file');
+                                setError(null);
+                                if (status !== 'ready') { setStatus('idle'); setProgress(0); }
+                            }
+                        }}
+                        className={`px-6 py-3 text-sm font-medium transition-colors ${inputMode === 'file' ? 'text-yellow-500 border-b-2 border-yellow-500' : 'text-neutral-500 hover:text-neutral-300'}`}
+                    >
+                        File Upload
+                    </button>
+                    <button
+                        onClick={() => {
+                            if (inputMode === 'file') {
+                                setInputMode('url');
+                                setError(null);
+                                if (status !== 'ready') { setStatus('idle'); setProgress(0); }
+                            }
+                        }}
+                        className={`px-6 py-3 text-sm font-medium transition-colors ${inputMode === 'url' ? 'text-yellow-500 border-b-2 border-yellow-500' : 'text-neutral-500 hover:text-neutral-300'}`}
+                    >
+                        YouTube URL
+                    </button>
+                </div>
+
                 {/* UPLOAD SECTION */}
+                {inputMode === 'file' && (
                 <section className={`transition-opacity duration-500 ${status === 'analyzing' ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
                     <div className="bg-neutral-900/50 rounded-xl border border-neutral-800 p-8 text-center border-dashed hover:border-teal-500/50 transition-colors">
                         <input
@@ -277,6 +374,46 @@ export default function PreviewPage() {
                         )}
                     </div>
                 </section>
+                )}
+
+                {/* YOUTUBE URL INPUT */}
+                {inputMode === 'url' && (
+                <section className={`transition-opacity duration-500 ${(status === 'downloading' || status === 'analyzing') ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
+                    <div className="bg-neutral-900/50 rounded-xl border border-neutral-800 p-8 border-dashed hover:border-yellow-500/50 transition-colors">
+                        <div className="max-w-lg mx-auto space-y-4">
+                            <div className="flex gap-3">
+                                <input
+                                    type="url"
+                                    placeholder="https://www.youtube.com/watch?v=..."
+                                    value={youtubeUrl}
+                                    onChange={(e) => setYoutubeUrl(e.target.value)}
+                                    className="flex-1 px-4 py-3 bg-neutral-800 border border-neutral-700 rounded-lg text-white placeholder-neutral-500 focus:outline-none focus:border-yellow-500 transition-colors"
+                                />
+                            </div>
+                            {status !== 'downloading' && status !== 'analyzing' && status !== 'ready' && (
+                                <button
+                                    onClick={handleAnalyzeUrl}
+                                    disabled={!youtubeUrl.trim()}
+                                    className="w-full px-8 py-3 bg-neutral-700 hover:bg-neutral-600 text-white font-medium rounded-lg shadow-lg transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    Run Preview Analysis
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                </section>
+                )}
+
+                {/* DOWNLOADING STATE (YouTube) */}
+                {status === 'downloading' && (
+                    <div className="text-center py-12">
+                        <Loader2 className="h-12 w-12 animate-spin text-yellow-500 mx-auto mb-4" />
+                        <h3 className="text-xl font-bold mb-2">Downloading from YouTube...</h3>
+                        <p className="text-gray-400">
+                            This may take 10-30 seconds depending on the video.
+                        </p>
+                    </div>
+                )}
 
                 {/* LOADING STATE */}
                 {status === 'analyzing' && (
@@ -324,7 +461,7 @@ export default function PreviewPage() {
 
                             <div className="flex gap-3">
                                 <button
-                                    onClick={handleAnalyze}
+                                    onClick={inputMode === 'url' ? handleAnalyzeUrl : handleAnalyze}
                                     className="px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-100 text-xs font-bold uppercase tracking-wider rounded transition-colors"
                                 >
                                     Retry Analysis
