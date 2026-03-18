@@ -1,4 +1,4 @@
-# Plan: previewモードへの改善反映
+# Plan: ローカル変更を Vercel にデプロイ
 
 ## Context
 
