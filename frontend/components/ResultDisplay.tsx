@@ -272,7 +272,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
         const onPause = () => setIsPlaying(false);
         const onEnded = () => {
             setIsPlaying(false);
-            setCurrentBarIndex(-1);
+            currentBarIndexRef.current = -1;
             anchorRef.current = null; // Clear anchor on stop
         };
 
@@ -327,7 +327,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                 audio.pause();
                 audio.currentTime = limit;
                 setIsPlaying(false);
-                setCurrentBarIndex(safeBars.length ? safeBars.length - 1 : -1);
+                currentBarIndexRef.current = safeBars.length ? safeBars.length - 1 : -1;
                 suppressScrollRef.current = Date.now() + 1000;
             }
         };
@@ -875,7 +875,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                         <span className="text-green-400">{(audioRef.current ? audioRef.current.currentTime - offsetSec : 0).toFixed(3)}s</span>
 
                         <span className="text-gray-400">Bar Idx:</span>
-                        <span className="text-blue-400">{currentBarIndex}</span>
+                        <span className="text-blue-400">{currentBarIndexRef.current}</span>
 
                         <span className="text-gray-400">Sec/Bar:</span>
                         <span>N/A</span>
