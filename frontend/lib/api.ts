@@ -19,6 +19,7 @@ export interface AnalysisResult {
     key: string;
     bars: Bar[] | null; // Nullable for Preview
     audio_url?: string;
+    beat_times?: number[]; // すべてのビートのタイムスタンプ（秒）
     // New fields
     mode?: AnalyzeMode;
     is_preview?: boolean;
@@ -120,6 +121,7 @@ export async function analyzeYoutube(url: string, cookiesFile?: File, mode: Anal
         formData.append("mode", mode);
     }
 
+    // Step 1: Submit job (backend returns 202 with job_id)
     const response = await fetchWithTimeout(endpoint, {
         method: 'POST',
         // Note: Do NOT set Content-Type header here, let browser set it with boundary for FormData
@@ -132,6 +134,80 @@ export async function analyzeYoutube(url: string, cookiesFile?: File, mode: Anal
         throw new Error(errorData.detail || 'Analysis failed');
     }
 
-    const data = await response.json();
-    return normalizeAnalysisResult(data);
+    const submitData = await response.json();
+    const jobId = submitData.job_id;
+
+    if (!jobId) {
+        // If response is not a job submission (e.g. direct result), return as-is
+        return normalizeAnalysisResult(submitData);
+    }
+
+    // Step 2: Poll for completion
+    const maxPollTime = 300000; // 5 minutes
+    const pollInterval = 2000; // 2 seconds
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < maxPollTime) {
+        await new Promise(r => setTimeout(r, pollInterval));
+
+        const statusRes = await fetch(`${API_URL}/analyze/status/${jobId}`);
+        if (statusRes.status === 404) {
+            throw new Error('Job not found. Please try again.');
+        }
+        const statusData = await statusRes.json();
+
+        if (statusData.status === 'error') {
+            throw new Error(statusData.error || 'Analysis failed');
+        }
+
+        if (statusData.status === 'done') {
+            // Step 3: Fetch result
+            const resultRes = await fetch(`${API_URL}/analyze/result/${jobId}`);
+            if (!resultRes.ok) {
+                throw new Error('Failed to fetch analysis result');
+            }
+            const resultData = await resultRes.json();
+            return normalizeAnalysisResult(resultData);
+        }
+    }
+
+    throw new Error('Analysis timed out. Please try again.');
 }
+
+// ============================================================================
+// BPM調整用API関数
+// ============================================================================
+
+export interface BPMAdjustRequest {
+    bars: Bar[];
+    original_bpm: number;
+    adjusted_bpm: number;
+}
+
+export interface BPMAdjustResponse {
+    adjusted_bars: Bar[];
+    original_bpm: number;
+    adjusted_bpm: number;
+    adjustment_ratio: number;
+}
+
+export async function adjustBPM(request: BPMAdjustRequest): Promise<BPMAdjustResponse> {
+    const response = await fetch(`${API_URL}/bpm/adjust`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'BPM adjustment failed');
+    }
+
+    return await response.json();
+}
+
+// ============================================================================
+// BPM調整用API関数ここまで
+// ============================================================================

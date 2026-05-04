@@ -1,19 +1,68 @@
 import os
 import anyio
+import sys
+import logging
 
 import psutil
+
+# 無効化stdoutバッファリング
+sys.stdout.reconfigure(line_buffering=True)
+
+# ルートロガーの設定
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('backend_app.log')
+    ]
+)
+
+# FastAPIおよび関連モジュールのログレベルを設定
+logging.getLogger("uvicorn").setLevel(logging.INFO)
+logging.getLogger("uvicorn.access").setLevel(logging.INFO)
+logging.getLogger("fastapi").setLevel(logging.DEBUG)
+
+# numbaのログレベルをWARNINGに設定（bytecode dumpを抑制）
+logging.getLogger("numba").setLevel(logging.WARNING)
+logging.getLogger("numba.core.byteflow").setLevel(logging.WARNING)
+logging.getLogger("numba.core.interpreter").setLevel(logging.WARNING)
+
+# アプリケーションログ用の設定
+app_logger = logging.getLogger(__name__)
+app_logger.setLevel(logging.DEBUG)
+
+# 明示的にハンドラーを追加（絶対パス）
+log_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backend_app.log')
+if not app_logger.handlers:
+    file_handler = logging.FileHandler(log_file_path)
+    file_handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    app_logger.addHandler(file_handler)
+
+app_logger.info("Backend starting...")
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 import librosa
 import numpy as np
+
+# madmom for more accurate BPM detection (currently not installed - commented out)
+# from madmom.features.beats import BeatDetection, BeatTrackingProcessor
+# from madmom.audio.signal import Signal
 import tempfile
 import os
 import shutil
 import math
+
+# リクエストサイズ制限を緩和
+from starlette.datastructures import UploadFile as StarletteUploadFile
 import yt_dlp
 from yt_dlp.utils import DownloadError
 import time
@@ -25,6 +74,48 @@ from typing import Dict, Any, Optional
 from enum import Enum
 
 app = FastAPI()
+
+# Simple test endpoint
+@app.get("/test")
+def test_endpoint():
+    print("[PRINT-TEST] Test endpoint called!", flush=True)
+    sys.stderr.write("[STDERR-TEST] Test endpoint called!\n")
+    sys.stderr.flush()
+    app_logger.info("[LOGGER-TEST] Test endpoint called!")
+    return {"status": "ok", "message": "Test endpoint is working"}
+
+# Add CORS logging middleware (BEFORE CORS middleware to see all requests)
+@app.middleware("http")
+async def cors_debug_middleware(request: Request, call_next):
+    origin = request.headers.get("origin")
+    print(f"[CORS-DEBUG] Method={request.method}, Path={request.url.path}, Origin={origin}")
+    app_logger.info(f"[CORS-DEBUG] Method={request.method}, Path={request.url.path}, Origin={origin}")
+    response = await call_next(request)
+    return response
+
+# Add logging middleware
+@app.middleware("http")
+async def log_req_lifecycle(request: Request, call_next):
+    t0 = time.time()
+
+    # ログファイルに直接書き込む
+    log_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backend_app.log')
+    with open(log_file_path, 'a') as f:
+        f.write(f"[DIRECT-LOG] {request.method} {request.url.path}\n")
+        f.flush()
+
+    app_logger.info(f"[REQ-START] {request.method} {request.url.path}")
+    try:
+        resp = await call_next(request)
+        return resp
+    except Exception as e:
+        app_logger.error(f"[REQ-ERROR] {request.method} {request.url.path} - {type(e).__name__}: {str(e)}")
+        import traceback
+        app_logger.error(traceback.format_exc())
+        raise
+    finally:
+        dt = (time.time() - t0) * 1000
+        app_logger.info(f"[REQ-END]   {request.method} {request.url.path} {dt:.1f}ms")
 
 # Create temp directory for served files
 TEMP_DIR = "temp"
@@ -57,8 +148,18 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:3001",
+        "http://localhost:3002",
+        "http://localhost:3003",
+        "http://localhost:3004",
+        "http://localhost:3005",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:3001",
+        "http://127.0.0.1:3002",
+        "http://127.0.0.1:3003",
+        "http://127.0.0.1:3004",
+        "http://127.0.0.1:3005",
+        "http://127.0.0.1:8000",
+        "http://localhost:8000",
         "https://bandscore.vercel.app",
     ],
     # Regex for Vercel preview URLs (bandscore-*.vercel.app)
@@ -67,17 +168,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-@app.middleware("http")
-async def log_req_lifecycle(request: Request, call_next):
-    t0 = time.time()
-    print(f"[REQ-START] {request.method} {request.url.path}")
-    try:
-        resp = await call_next(request)
-        return resp
-    finally:
-        dt = (time.time() - t0) * 1000
-        print(f"[REQ-END]   {request.method} {request.url.path} {dt:.1f}ms")
 
 
 # --- Job store (NEW) ---
@@ -192,6 +282,50 @@ CHORD_TO_TAB: ChordTab = {
     "A#m7": ["x", "1", "3", "1", "2", "1"],
     "Bm7":  ["x", "2", "0", "2", "0", "2"],
 }
+
+# --- MADMOM BPM Detection ---
+# def detect_bpm_madmom(y, sr):
+#     """
+#     madmomによる正確な BPM 検出 (currently not installed - commented out)
+#
+#
+#     Args:
+#         y: オーディオ信号
+#         sr: サンプリングレート (通常 22050 Hz)
+#
+#     Returns:
+#         tuple: (bpm, beat_times) - 検出された BPM とビートタイムスタンプ配列
+#     """
+#     try:
+#         print("[MADMOM] Loading RNN model for onset detection...")
+#         sig = Signal(y, sr)
+#
+#         # RNNベースの onset 検出
+#         onsets = BeatDetection()(sig)
+#         print(f"[MADMOM] RNN onset detection complete: {len(onsets)} onsets")
+#         # HMMベースのビートトラッキング
+#         beats = BeatTrackingProcessor()(onsets)
+#         print(f"[MADMOM] HMM beat tracking complete: {len(beats)} beats")
+#         # BPM を計算
+#         if len(beats.times) > 1:
+#             beat_intervals = np.diff(beats.times)
+#             median_interval = np.median(beat_intervals)
+#             bpm = 60.0 / median_interval
+#             print(f"[MADMOM] Median beat interval: {median_interval:.3f}s, Calculated BPM: {bpm:.1f}")
+#         else:
+#             bpm = 120.0  # フォールバック
+#             print("[MADMOM] Not enough beats detected, using fallback BPM: 120")
+#
+#         return bpm, beats.times.tolist() if len(beats.times) > 0 else []
+#
+#     except ImportError as e:
+#         print(f"[ERROR] madmom not installed: {e}")
+#         print("[ERROR] Falling back to librosa-based BPM detection")
+#         return None, None
+#     except Exception as e:
+#         print(f"[ERROR] madmom BPM detection failed: {e}")
+#         print("[ERROR] Falling back to librosa-based BPM detection")
+#         return None, None
 
 def chord_to_tab(chord: str) -> Optional[list[str]]:
     key = chord.strip()
@@ -311,6 +445,44 @@ def compute_chroma_log(y: np.ndarray, sr: int, hop_length: int = 2048) -> np.nda
     # L1 Normalization per frame
     chroma_norm = chroma_log / (np.sum(chroma_log, axis=0, keepdims=True) + 1e-8)
     return chroma_norm
+
+def compute_chroma_cqt(y: np.ndarray, sr: int, hop_length: int = 2048) -> np.ndarray:
+    """
+    Compute CQT-based chroma features with HPSS.
+    CQT provides logarithmic frequency resolution — better for guitar low strings
+    (E2=82Hz, A2=110Hz) than STFT which has fixed linear frequency bins.
+    bins_per_octave=36: 3x oversampling for smoother pitch estimation.
+    Returns: (12, T)
+    """
+    y_harmonic = librosa.effects.harmonic(y, margin=4.0)
+    chroma = librosa.feature.chroma_cqt(
+        y=y_harmonic,
+        sr=sr,
+        hop_length=hop_length,
+        bins_per_octave=36,
+        norm=None,  # Manual log + L1 normalization below
+    )
+    del y_harmonic
+    chroma_log = np.log1p(10.0 * chroma)
+    return chroma_log / (np.sum(chroma_log, axis=0, keepdims=True) + 1e-8)
+
+def apply_chroma_contrast(chroma: np.ndarray, filter_size: int = 50, blend: float = 0.25) -> np.ndarray:
+    """
+    ローリング最小値を減算してペダルトーン（通奏低音）を除去する。
+    filter_size=50: 50フレーム × 2048/22050 ≈ 4.6秒のウィンドウ
+    各ピッチクラスで持続する背景エネルギーを除いて、コード変化を際立たせる。
+    blend: 元のchromaをどれだけ残すか (0.0=完全除去, 1.0=除去なし)。
+           完全除去するとフレームが均一になり情報量が失われるため、blend分だけ元信号を保持する。
+    Input/Output: (12, T) normalized chroma
+    """
+    from scipy.ndimage import minimum_filter1d
+    chroma_bg = minimum_filter1d(chroma, size=filter_size, axis=1, mode='reflect')
+    chroma_fg = np.maximum(0.0, chroma - chroma_bg)
+    # ブレンド: 完全除去ではなく元信号を blend 分残してコントラストと情報量のバランスを取る
+    chroma_out = chroma_fg * (1.0 - blend) + chroma * blend
+    chroma_sum = np.sum(chroma_out, axis=0, keepdims=True)
+    # chroma_sumが0のフレームはゼロ除算を避けるため元のchromaをそのまま返す
+    return np.where(chroma_sum > 1e-8, chroma_out / chroma_sum, chroma)
 
 def compute_bass_chroma(y: np.ndarray, sr: int, hop_length: int = 2048) -> np.ndarray:
     """
@@ -513,6 +685,100 @@ def _cosine_similarity(a: np.ndarray, b: np.ndarray, eps: float = 1e-9) -> float
     denom = (np.linalg.norm(a) * np.linalg.norm(b)) + eps
     return float(np.dot(a, b) / denom)
 
+# --- HMM: Transition Matrix & Viterbi ---
+
+def build_transition_matrix(chord_labels: list) -> np.ndarray:
+    """
+    Build chord-to-chord transition log-probability matrix from music theory.
+
+    Design: Non-self weights are normalized to sum to (1-SELF_PROB), then
+    the diagonal is filled with SELF_PROB — guaranteeing exact self-transition
+    probability regardless of the number of chords or their weights.
+
+    Returns: (n, n) log-probability matrix, log_trans[i, j] = log P(j|i)
+    """
+    SELF_PROB    = 0.50   # 0.65→0.50: switching cost を緩和してコード変化を起きやすく
+    W_5TH_UP    = 5.0   # dominant (C→G, Am→Em)
+    W_5TH_DOWN  = 4.0   # subdominant (C→F, Am→Dm)
+    W_RELATIVE  = 5.0   # relative major/minor (C↔Am)
+    BASE_WEIGHT = 1.0   # all other chords
+
+    n = len(chord_labels)
+
+    def _is_minor(lbl: str) -> bool:
+        for note in sorted(NOTE_NAMES, key=len, reverse=True):
+            if lbl.startswith(note):
+                suffix = lbl[len(note):]
+                return suffix == "m" or suffix == "m7"
+        return False
+
+    # Build unnormalized non-self weight matrix (diagonal stays 0)
+    non_self = np.full((n, n), BASE_WEIGHT, dtype=np.float64)
+    np.fill_diagonal(non_self, 0.0)
+
+    for i, ci in enumerate(chord_labels):
+        root_i = chord_root_index(ci)
+        minor_i = _is_minor(ci)
+        for j, cj in enumerate(chord_labels):
+            if i == j:
+                continue
+            root_j = chord_root_index(cj)
+            minor_j = _is_minor(cj)
+            interval = (root_j - root_i) % 12
+
+            if interval == 7:
+                non_self[i, j] += W_5TH_UP
+            elif interval == 5:
+                non_self[i, j] += W_5TH_DOWN
+            if minor_i and not minor_j and interval == 3:
+                non_self[i, j] += W_RELATIVE
+            elif not minor_i and minor_j and interval == 9:
+                non_self[i, j] += W_RELATIVE
+
+    # Scale each row's non-self weights to sum to (1 - SELF_PROB)
+    row_sums = non_self.sum(axis=1, keepdims=True) + 1e-12
+    trans = non_self / row_sums * (1.0 - SELF_PROB)
+    np.fill_diagonal(trans, SELF_PROB)
+
+    return np.log(trans + 1e-12)
+
+
+def viterbi_decode(
+    emission_log_probs: np.ndarray,
+    log_trans: np.ndarray,
+    log_init: np.ndarray,
+) -> np.ndarray:
+    """
+    Viterbi decoding in log-probability space.
+
+    Args:
+        emission_log_probs: (T, n) log-emission probabilities
+        log_trans: (n, n) log-transition matrix, log_trans[i, j] = log P(j|i)
+        log_init: (n,) log-initial state probabilities
+
+    Returns:
+        path: (T,) int array of most likely chord indices
+    """
+    T, n = emission_log_probs.shape
+    dp = np.full((T, n), -np.inf, dtype=np.float64)
+    bp = np.zeros((T, n), dtype=np.int32)
+
+    dp[0] = log_init + emission_log_probs[0]
+
+    for t in range(1, T):
+        # trans_scores[i, j] = dp[t-1, i] + log_trans[i, j]
+        trans_scores = dp[t - 1, :, np.newaxis] + log_trans  # (n, n)
+        bp[t] = np.argmax(trans_scores, axis=0)               # (n,)
+        dp[t] = trans_scores[bp[t], np.arange(n)] + emission_log_probs[t]
+
+    path = np.zeros(T, dtype=np.int32)
+    path[T - 1] = np.argmax(dp[T - 1])
+    for t in range(T - 2, -1, -1):
+        path[t] = bp[t + 1, path[t + 1]]
+
+    return path
+
+
 def detect_chords_matrix(
     main_matrix: np.ndarray,   # (S, 12)
     bass_matrix: np.ndarray,   # (S, 12)
@@ -692,6 +958,133 @@ def detect_chords_matrix(
     final_last_chord = chord_labels[last]
     final_run_length = run_length
     return [chord_labels[j] for j in out_idx], final_last_chord, final_run_length
+
+
+def detect_chords_hmm(
+    main_matrix: np.ndarray,
+    bass_matrix: np.ndarray,
+    penalty_mask: Optional[np.ndarray] = None,
+    penalty_value: float = 0.20,
+    main_weight: float = 0.6,
+    bass_weight: float = 0.35,
+    temperature: float = 8.0,
+    # Accepted for drop-in compatibility but unused (HMM handles sequence globally)
+    _forced_last_chord: Optional[str] = None,
+    _forced_run_length: Optional[int] = None,
+    **kwargs,
+) -> tuple:
+    """
+    HMM-based chord detection using Viterbi decoding.
+
+    Drop-in replacement for detect_chords_matrix() with the same return type:
+        (list[str], str, int)
+
+    Pipeline:
+      1. Compute cosine similarity scores (same as detect_chords_matrix)
+      2. Apply diatonic penalty before softmax
+      3. Convert to emission log-probabilities via temperature-scaled softmax
+      4. Viterbi decode using music-theory transition matrix
+      5. Return chord list + cross-chunk continuity state
+    """
+    num_segments = main_matrix.shape[0]
+    if num_segments == 0:
+        return [], "", 0
+
+    if bass_matrix.shape[0] != num_segments:
+        min_segs = min(num_segments, bass_matrix.shape[0])
+        main_matrix = main_matrix[:min_segs, :]
+        bass_matrix = bass_matrix[:min_segs, :]
+        num_segments = min_segs
+
+    num_chords = TEMPLATE_MATRIX.shape[0]
+
+    # 1. Raw scores: cosine similarity (C, S)
+    main_scores = cosine_similarity_matrix(TEMPLATE_MATRIX, main_matrix.T)
+
+    bass_scores = np.zeros((num_chords, num_segments), dtype=np.float64)
+    for chord_idx, label in enumerate(CHORD_LABELS):
+        root_idx = chord_root_index(label)
+        bass_scores[chord_idx, :] = bass_matrix[:, root_idx]
+
+    # Fix B: セグメント単位でmax正規化（グローバルmaxではなく各セグメント内の比率を保持）
+    # グローバルmax正規化では全セグメントが同一スケールに圧縮され、
+    # セグメント間の差異が消えてしまう問題を修正
+    bass_max_per_seg = np.max(bass_scores, axis=0, keepdims=True)  # (1, S)
+    bass_scores = np.where(bass_max_per_seg > 1e-8,
+                           bass_scores / (bass_max_per_seg + 1e-8),
+                           bass_scores)
+
+    raw_scores = main_scores * main_weight + bass_scores * bass_weight  # (C, S)
+
+    # 2. Diatonic penalty (applied before softmax to shift distribution)
+    if penalty_mask is not None and penalty_mask.shape[0] == num_chords:
+        raw_scores[penalty_mask, :] -= penalty_value
+
+    # Fix E: emission前のスコア分散を診断ログ出力
+    # セグメント毎のtop-1スコアとtop-2スコアの差（小さければ同一コード固着リスク高）
+    raw_T = raw_scores.T  # (S, C)
+    sorted_raw = np.sort(raw_T, axis=1)[:, ::-1]  # 降順ソート
+    score_gap = sorted_raw[:, 0] - sorted_raw[:, 1]  # top1 - top2
+    mean_gap = float(np.mean(score_gap))
+    min_gap = float(np.min(score_gap))
+    top1_chord_idx = int(np.argmax(raw_T[0]))
+    uniform_count = int(np.sum(np.argmax(raw_T, axis=1) == top1_chord_idx))
+    print(f"[HMM-Diag] score_gap mean={mean_gap:.4f} min={min_gap:.4f} "
+          f"uniform={uniform_count}/{num_segments} segs share top chord '{CHORD_LABELS[top1_chord_idx]}'")
+
+    # 3. Temperature-scaled softmax → emission log-probabilities (T, C)
+    scores_T = raw_scores.T * temperature            # (S, C)
+    scores_T -= scores_T.max(axis=1, keepdims=True)  # numerical stability
+    log_sum_exp = np.log(np.sum(np.exp(scores_T), axis=1, keepdims=True) + 1e-12)
+    emission_log_probs = scores_T - log_sum_exp      # (T, C)
+
+    # Fix E: emission分散の診断
+    emission_std = float(np.std(emission_log_probs))
+    print(f"[HMM-Diag] emission_log_probs std={emission_std:.4f} "
+          f"(low=uniform risk, temperature={temperature})")
+
+    # 4. Viterbi decoding
+    path = viterbi_decode(emission_log_probs, _HMM_LOG_TRANS, _HMM_LOG_INIT)
+
+    # 5. Convert to chord names
+    chord_sequence = [CHORD_LABELS[idx] for idx in path]
+
+    # Fix C: Viterbi結果が全セグメントで均一な場合、greedy+stagnation-awareにフォールバック
+    # 全均一はemission確率が全フレームで同一であることを意味し、
+    # HMMの遷移行列が支配的になっているため信頼性が低い
+    unique_in_result = len(set(chord_sequence))
+    if unique_in_result <= 1 and num_segments > 4:
+        print(f"[HMM-FALLBACK] Viterbi returned uniform result ({chord_sequence[0] if chord_sequence else '?'} × {num_segments}). "
+              f"Falling back to greedy+stagnation-aware decoder.")
+        fallback_result = detect_chords_matrix(
+            main_matrix, bass_matrix,
+            penalty_mask=penalty_mask,
+            penalty_value=penalty_value,
+            main_weight=main_weight,
+            bass_weight=bass_weight,
+            forced_last_chord=_forced_last_chord,
+            forced_run_length=_forced_run_length,
+        )
+        return fallback_result
+
+    # Cross-chunk continuity state
+    final_last_chord = chord_sequence[-1] if chord_sequence else ""
+    final_run_length = 1
+    for i in range(len(chord_sequence) - 2, -1, -1):
+        if chord_sequence[i] == final_last_chord:
+            final_run_length += 1
+        else:
+            break
+
+    return chord_sequence, final_last_chord, final_run_length
+
+
+# HMM parameters (computed once at module load, reused for every request)
+_HMM_LOG_TRANS: np.ndarray = build_transition_matrix(CHORD_LABELS)
+_HMM_LOG_INIT: np.ndarray = np.full(
+    len(CHORD_LABELS), np.log(1.0 / len(CHORD_LABELS)), dtype=np.float64
+)
+
 
 def aggregate_chroma_per_segment(
     chroma: np.ndarray,
@@ -919,7 +1312,11 @@ def smooth_chord_sequence_stagnation_aware(chords: list[str], passes: int = 2, m
 
     return smoothed
 
-def break_long_stagnation_runs(chords: list[str], max_consecutive: int = 6) -> list[str]:
+def break_long_stagnation_runs(
+    chords: list[str],
+    max_consecutive: int = 6,
+    diatonic_chords: Optional[list[str]] = None,
+) -> list[str]:
     """
     Break up any remaining long stagnation runs after detection and smoothing.
 
@@ -932,27 +1329,15 @@ def break_long_stagnation_runs(chords: list[str], max_consecutive: int = 6) -> l
     Args:
         chords: Input chord sequence
         max_consecutive: Maximum allowed consecutive bars before breaking
+        diatonic_chords: Optional list of diatonic chords for key-aware fallback
     """
-    import sys
-
-    # デバッグログをファイルに出力
-    with open('debug_stagnation.log', 'a', encoding='utf-8') as f:
-        f.write(f"\n=== break_long_stagnation_runs called ===\n")
-        f.write(f"Input: {len(chords)} chords, max_consecutive={max_consecutive}\n")
-    sys.stdout.flush()
-
     print(f"[STAGNATION-DEBUG] Function called with {len(chords)} chords")
 
     if len(chords) <= max_consecutive:
-        with open('debug_stagnation.log', 'a', encoding='utf-8') as f:
-            f.write(f"SKIP: len(chords)={len(chords)} <= max_consecutive={max_consecutive}\n")
         return chords[:]
 
     result = chords[:]
     i = 0
-
-    with open('debug_stagnation.log', 'a', encoding='utf-8') as f:
-        f.write(f"Starting loop...\n")
 
     while i < len(result):
         # Count consecutive run
@@ -962,13 +1347,7 @@ def break_long_stagnation_runs(chords: list[str], max_consecutive: int = 6) -> l
 
         run_length = j - i
 
-        # ログを追加
-        with open('debug_stagnation.log', 'a', encoding='utf-8') as f:
-            f.write(f"Position {i}: chord={result[i]}, run_length={run_length}\n")
-
         if run_length > max_consecutive:
-            with open('debug_stagnation.log', 'a', encoding='utf-8') as f:
-                f.write(f"  LONG RUN DETECTED: {result[i]} × {run_length} bars at position {i}-{j-1}\n")
             # Found a long run - insert breaks
             # Strategy: Every max_consecutive bars, insert a 1-bar variation
             # Use the previous or next different chord if available
@@ -983,7 +1362,6 @@ def break_long_stagnation_runs(chords: list[str], max_consecutive: int = 6) -> l
 
             # Strategy 2: If no adjacent chord, use most frequent different chord
             if not alt_chord:
-                from collections import Counter
                 chord_counts = Counter(result)
                 # Find most common chord that's different from current
                 for chord, count in chord_counts.most_common():
@@ -992,9 +1370,29 @@ def break_long_stagnation_runs(chords: list[str], max_consecutive: int = 6) -> l
                         print(f"[STAGNATION] Using fallback chord: {alt_chord} (frequency: {count})")
                         break
 
-            # Strategy 3: Ultimate fallback (rare)
+            # Fix D: Strategy 3: diatonic chordsから代替コードを選定
+            # 全バーが同一コードの場合（unique=1）に代替コード候補がない → 音楽理論的代替を使用
+            if not alt_chord and diatonic_chords:
+                stuck_chord = result[i]
+                # diatonic chordsのうち、現在のコードと異なり、かつCHORD_LABELSに存在するものを選ぶ
+                diatonic_alts = [c for c in diatonic_chords if c != stuck_chord and c in CHORD_LABELS]
+                if diatonic_alts:
+                    # 優先順位: minor chords（より自然な変化）> major chords
+                    minor_alts = [c for c in diatonic_alts if 'm' in c]
+                    alt_chord = minor_alts[0] if minor_alts else diatonic_alts[0]
+                    print(f"[STAGNATION] Using diatonic fallback: {alt_chord} (from key diatonic chords)")
+
+            # Strategy 4 (last resort): 常に何らかのコードを選ぶ
             if not alt_chord:
-                print(f"[STAGNATION] WARNING: Cannot break stagnation - no alternative chord available")
+                # 現在のコードのルートに5度のコードを選択（最も自然な動き）
+                stuck_root_idx = chord_root_index(result[i])
+                fifth_up_root = (stuck_root_idx + 7) % 12
+                fifth_chord = NOTE_NAMES[fifth_up_root] + "m7"  # minor 7th - 保守的な選択
+                if fifth_chord in CHORD_LABELS:
+                    alt_chord = fifth_chord
+                    print(f"[STAGNATION] Using 5th-up fallback: {alt_chord}")
+                else:
+                    print(f"[STAGNATION] WARNING: Cannot break stagnation - no alternative chord available")
 
             if alt_chord:
                 # Insert breaks at regular intervals
@@ -1127,15 +1525,18 @@ def evaluate_phase_concentration(onset_env: np.ndarray, sr: int,
 
 def verify_tempo_octave(y: np.ndarray, sr: int, detected_bpm: float, onset_env: np.ndarray) -> tuple[float, float]:
     """
-    倍速検出を検証し、必要に応じて半分速に補正。
+    倍速・1.5倍速検出を検証し、必要に応じて補正。
     位相エネルギー集中度をゲート条件として使用:
-    半分速候補に明確な拍構造がある場合のみ補正を許可。
+    候補に明確な拍構造がある場合のみ補正を許可。
     """
     if detected_bpm < 80 or detected_bpm > 240:
         print(f"[OctaveVerify] BPM {detected_bpm:.1f} outside correction range, keeping as-is")
         return detected_bpm, 1.0
 
+    # 候補BPMの計算: 半速、1.5倍速、全速
     half_bpm = detected_bpm * 0.5
+    two_thirds_bpm = detected_bpm / 1.5  # 1.5倍速の逆数
+
     if half_bpm < 40:
         return detected_bpm, 1.0
 
@@ -1161,15 +1562,46 @@ def verify_tempo_octave(y: np.ndarray, sr: int, detected_bpm: float, onset_env: 
           f"bass_ac={bass_ac_full:.3f}, full_ac={full_ac_full:.3f}, "
           f"phase={phase_full:.3f}, prior={prior_full:.1f}, total={score_full:.3f}")
 
+    # 1.5倍速チェック: 検出されたBPMが本来のBPMの1.5倍である可能性
+    if 60 <= two_thirds_bpm <= 200:
+        bass_ac_two_thirds = evaluate_bass_ac(y, sr, two_thirds_bpm)
+        full_ac_two_thirds = evaluate_fullband_ac(onset_env, sr, two_thirds_bpm)
+        phase_two_thirds = evaluate_phase_concentration(onset_env, sr, two_thirds_bpm)
+        prior_two_thirds = evaluate_tempo_prior(two_thirds_bpm)
+
+        score_two_thirds = (bass_ac_two_thirds * 0.35 + full_ac_two_thirds * 0.25 +
+                           phase_two_thirds * 0.20 + prior_two_thirds * 0.20)
+
+        print(f"[OctaveVerify] {two_thirds_bpm:.1f} BPM (x2/3, potential 1.5x correction): "
+              f"bass_ac={bass_ac_two_thirds:.3f}, full={full_ac_two_thirds:.3f}, "
+              f"phase={phase_two_thirds:.3f}, prior={prior_two_thirds:.1f}, total={score_two_thirds:.3f}")
+
+        # 1.5倍速補正の条件: 2/3速のスコアが検出BPMより良い場合
+        # 閾値を緩和: 5%以上のスコア向上 かつ 位相集中度が高い場合
+        score_ratio = score_two_thirds / max(score_full, 1e-9)
+        if score_two_thirds > score_full * 1.05:  # 5%以上のスコア向上
+            print(f"[OctaveVerify] 1.5x speed correction applied: {detected_bpm:.1f} -> {two_thirds_bpm:.1f} BPM "
+                  f"(score improved by {score_two_thirds/score_full:.2f}x)")
+            return two_thirds_bpm, 0.666
+
     # ゲート条件: 半分速候補のビート位相エネルギー集中度
     # 真のテンポが半分速なら、その周期でダウンビートにエネルギーが集中する。
     # 集中度が低い(< PHASE_GATE)場合、半分速にリズム構造がない → 補正しない。
     PHASE_GATE = 0.25
-    if phase_half < PHASE_GATE:
+    SCORE_OVERRIDE_RATIO = 1.15  # さらに緩和: 15%以上のスコア差で×0.5を適用
+    score_ratio = score_half / max(score_full, 1e-9)
+    score_override = score_ratio >= SCORE_OVERRIDE_RATIO
+
+    if phase_half < PHASE_GATE and not score_override:
         print(f"[OctaveVerify] Half-tempo phase={phase_half:.3f} < {PHASE_GATE} "
-              f"(weak beat structure) -> keeping {detected_bpm:.1f}")
+              f"(weak beat structure, score_ratio={score_ratio:.2f} < {SCORE_OVERRIDE_RATIO}) "
+              f"-> keeping {detected_bpm:.1f} for BassTempoCheck")
         print(f"[OctaveVerify] Selected: {detected_bpm:.1f} BPM (factor=x1.0, score={score_full:.3f})")
         return detected_bpm, 1.0
+    elif phase_half < PHASE_GATE and score_override:
+        print(f"[OctaveVerify] Half-tempo phase={phase_half:.3f} < {PHASE_GATE} "
+              f"BUT score_ratio={score_ratio:.2f} >= {SCORE_OVERRIDE_RATIO} "
+              f"(very strong half-tempo signal) -> overriding gate to ×0.5")
 
     # ゲート通過: 半分速に明確なリズム構造あり → スコア比較
     if score_half > score_full:
@@ -1337,12 +1769,14 @@ def refine_bar_phase(y: np.ndarray, sr: int, bpm: float, phase_offset_sec: float
     best_idx = int(np.argmax(scores_b))
     best_shift = shifts_to_test[best_idx]
 
-    # ステータスクオ保護: 2%未満の改善なら変更しない
+    # ステータスクオ保護: 大きなシフトほど高い改善率を要求 (基準2% + シフト量×2%/beat)
     if best_idx != 0:
         improvement = (scores_b[best_idx] - scores_b[0]) / (abs(scores_b[0]) + 1e-8)
-        if improvement < 0.02:
+        SHIFT_PENALTY_PER_BEAT = 0.02  # 大きなシフトを抑制: 1ビートあたり追加2%の改善を要求
+        required_improvement = 0.02 + abs(best_shift) * SHIFT_PENALTY_PER_BEAT
+        if improvement < required_improvement:
             print(f"[BarPhaseRefine] Step B: shift={best_shift} "
-                  f"improvement={improvement:.3f} < 0.02, keeping shift=0")
+                  f"improvement={improvement:.3f} < required={required_improvement:.3f}, keeping shift=0")
             best_shift = 0.0
 
     final_phase = refined_beat_phase + best_shift * beat_duration
@@ -1355,12 +1789,29 @@ def refine_bar_phase(y: np.ndarray, sr: int, bpm: float, phase_offset_sec: float
 class YouTubeRequest(BaseModel):
     url: str
 
+def get_default_cookies_path() -> str | None:
+    """
+    デフォルトの cookies.txt ファイルパスを取得
+    プロジェクトルートの cookies.txt を探す
+    """
+    # backend ディレクトリではなく、プロジェクトルートの cookies.txt を探す
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    default_cookies_path = os.path.join(project_root, "cookies.txt")
+    if os.path.exists(default_cookies_path):
+        return default_cookies_path
+    return None
+
+
 def download_youtube_audio(url: str, cookie_path: str | None = None) -> str:
     """
     Download audio from YouTube URL using yt-dlp.
     Returns the path to the downloaded file.
+    
+    Retry strategy:
+      Attempt 1: bestaudio[ext=m4a]/bestaudio/best (preferred for browser playback)
+      Attempt 2: bestaudio (any format, broader compatibility)
     """
-    print(f"[DEBUG] yt-dlp start: {url}")
+    app_logger.debug(f"yt-dlp start: {url}")
     # Determine FFmpeg location
     base_dir = os.path.dirname(os.path.abspath(__file__))
     ffmpeg_bin_dir = os.path.join(base_dir, "bin")
@@ -1372,68 +1823,139 @@ def download_youtube_audio(url: str, cookie_path: str | None = None) -> str:
     request_id = uuid.uuid4().hex
     outtmpl = os.path.join(TEMP_DIR, f"{request_id}-%(id)s.%(ext)s")
 
-    ydl_opts = {
-        "format": "bestaudio[ext=m4a]/bestaudio/best",
-        "noplaylist": True,
-        "socket_timeout": 20,
-        "retries": 3,
-        "fragment_retries": 3,
-        "concurrent_fragment_downloads": 1,
-        "geo_bypass": True,
-        "nopart": True,
-        "overwrites": True,
-        "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-        },
-        # MP3変換を廃止: M4A(AAC)をそのまま配信し、
-        # librosaとブラウザ間のエンコーダ遅延不一致を排除
-        "outtmpl": outtmpl,
-        "quiet": False,
-        "no_warnings": False,
-        "ffmpeg_location": ffmpeg_location,
-    }
+    # Node.js をJSランタイムとして使用（yt-dlpのYouTube署名解読に必須）
+    # yt-dlp 2026.03+ ではJSランタイムなしだと一部動画で空ファイルになる
+    js_runtimes = {"node": {}}
+    # denoもフォールバックとして登録
+    try:
+        import shutil
+        if shutil.which("deno"):
+            js_runtimes["deno"] = {}
+    except Exception:
+        pass
 
-    if cookie_path:
-        ydl_opts["cookiefile"] = cookie_path
-        print("[DEBUG] yt-dlp using cookies")
+    formats_to_try = [
+        "bestaudio[ext=m4a]/bestaudio/best",  # 1st: M4A preferred
+        "bestaudio/best",                      # 2nd: any audio format
+    ]
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+    last_error = None
+    for attempt, fmt in enumerate(formats_to_try):
+        ydl_opts = {
+            "format": fmt,
+            "noplaylist": True,
+            "socket_timeout": 60,
+            "retries": 10,
+            "fragment_retries": 10,
+            "concurrent_fragment_downloads": 3,
+            "geo_bypass": True,
+            "nopart": True,
+            "overwrites": True,
+            "extract_flat": False,
+            "ignoreerrors": False,
+            "nocheckcertificate": False,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android"],
+                }
+            },
+            # HTTPヘッダーを設定（RestrictedMode等の回避）
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+                "Accept": "*/*",
+                "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Referer": "https://www.youtube.com/",
+                "Origin": "https://www.youtube.com",
+                "Connection": "keep-alive",
+                "Sec-Fetch-Dest": "empty",
+                "Sec-Fetch-Mode": "cors",
+                "Sec-Fetch-Site": "same-origin",
+                "Sec-Ch-Ua": '"Google Chrome";v="135", "Not-A.Brand";v="8"',
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": '"Windows"',
+            },
+            "outtmpl": outtmpl,
+            "quiet": False,
+            "no_warnings": False,
+            "ffmpeg_location": ffmpeg_location,
+            "js_runtimes": js_runtimes,
+            "remote_components": ["ejs:github"],  # リモートコンポーネントチャレンジソルバースクリプトをダウンロード
+        }
+
+        if cookie_path:
+            ydl_opts["cookiefile"] = cookie_path
+            app_logger.debug("yt-dlp using cookies")
+
         try:
-            print("[DEBUG] yt-dlp extract_info... (download=True)")
-            info = ydl.extract_info(url, download=True)
-            print("[DEBUG] yt-dlp extract_info done")
-            filename = ydl.prepare_filename(info)
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                app_logger.debug(f"yt-dlp attempt {attempt+1}/{len(formats_to_try)}: format={fmt}")
+                info = ydl.extract_info(url, download=True)
+                filename = ydl.prepare_filename(info)
 
-            if os.path.exists(filename):
-                print(f"[DEBUG] yt-dlp done: {filename} ({os.path.getsize(filename)} bytes)")
-                return filename
+                if os.path.exists(filename):
+                    file_size = os.path.getsize(filename)
+                    if file_size > 0:
+                        app_logger.debug(f"yt-dlp done: {filename} ({file_size} bytes)")
+                        return filename
+                    else:
+                        # 0バイトファイルの場合、次のフォーマットで再試行
+                        app_logger.warning(f"yt-dlp downloaded 0-byte file, removing and retrying...")
+                        os.remove(filename)
+                        last_error = DownloadError("Downloaded file is empty (0 bytes)")
+                        continue
 
-            raise RuntimeError("yt-dlp download succeeded but output file not found")
+                last_error = RuntimeError("yt-dlp download succeeded but output file not found")
+                continue
 
         except DownloadError as e:
             msg = str(e)
-            print(f"[ERROR] yt-dlp download error: {msg}")
-            
+            print(f"[ERROR] yt-dlp download error (attempt {attempt+1}): {msg}")
+            app_logger.error(f"yt-dlp download error (attempt {attempt+1}): {msg}")
+
+            # 即座にリトライ不要なエラー（再試行しても改善しない）
             # 429 Too Many Requests
             if "Too many requests" in msg or "HTTP Error 429" in msg:
                 raise HTTPException(
                     status_code=429,
-                    detail="YouTube Rate Limit Exceeded. Please try again later."
+                    detail="YouTubeのレート制限に達しました。数分後に再度お試しください。"
                 )
 
-            # 403 Forbidden (Login/Bot/Privacy)
+            # 403 Forbidden (Login/Bot/Privacy/RestrictedMode)
             if ("Sign in to confirm you're not a bot" in msg
                 or "confirm you're not a bot" in msg
-                or "cookies" in msg
                 or "This video is only available to Music Premium members" in msg
                 or "Private video" in msg
                 or "HTTP Error 403" in msg
-                or "Forbidden" in msg):
+                or "Forbidden" in msg
+                or "RestrictedMode" in msg):
+                app_logger.error(f"403 Forbidden detected: {msg}")
                 raise HTTPException(
                     status_code=403,
-                    detail="YouTube Access Denied (Login/Cookies required). Please try a different video or upload cookies.txt."
+                    detail="YouTubeがアクセスを拒否しました（制限付きモード）。別の動画を試すか、cookies.txt をアップロードしてください。"
                 )
-            raise e
+
+            # リトライ可能なエラー: 次のフォーマットで再試行
+            last_error = e
+            continue
+
+    # すべてのフォーマットで失敗
+    if last_error:
+        msg = str(last_error)
+        # 空ファイルエラーの場合のユーザーフレンドリーなメッセージ
+        if "empty" in msg.lower() or "0 bytes" in msg.lower():
+            raise HTTPException(
+                status_code=422,
+                detail="YouTubeからの音声データが空でした。動画が利用可能か確認してください。cookies.txt のアップロードで解決する場合があります。"
+            )
+        if "JavaScript" in msg or "JS runtime" in msg or "js_runtimes" in msg:
+            raise HTTPException(
+                status_code=500,
+                detail="サーバーにJavaScriptランタイムが不足しています。管理者にお問い合わせください。"
+            )
+        raise HTTPException(status_code=500, detail=f"ダウンロードに失敗しました: {msg}")
+    
+    raise HTTPException(status_code=500, detail="ダウンロードに失敗しました（原因不明）")
 
 def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float = 0.0, duration_limit_sec: float | None = None, forced_bpm: float | None = None, forced_phase: float | None = None, forced_beats_per_seg: int | None = None, forced_last_chord: str | None = None, forced_run_length: int | None = None) -> dict:
     """Core analysis logic reusable for both uploads and URLs.
@@ -1452,8 +1974,8 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
             except Exception:
                 pass
 
-    print(f"[DEBUG] Starting analysis for {file_path} (offset={offset_sec}, dur={duration_limit_sec})")
-    print(f"mem start: {mem_mb():.1f} MB")
+    app_logger.debug(f"Starting analysis for {file_path} (offset={offset_sec}, dur={duration_limit_sec})")
+    app_logger.info(f"mem start: {mem_mb():.1f} MB")
     _progress(5) # Start
 
     try:
@@ -1465,27 +1987,29 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
         load_dur = duration_limit_sec if duration_limit_sec is not None else MAX_ANALYSIS_SEC
 
         y, sr = librosa.load(file_path, sr=22050, mono=True, offset=float(offset_sec), duration=float(load_dur))
-        print(f"mem after load: {mem_mb():.1f} MB")
+        app_logger.info(f"mem after load: {mem_mb():.1f} MB")
         _progress(20) # Loaded
-        
-        print(f"[DEBUG] Audio loaded. Size: {y.size}, SR: {sr}")
+
+        app_logger.debug(f"Audio loaded. Size: {y.size}, SR: {sr}")
         if y.size == 0:
             raise ValueError("Audio file is empty or unreadable")
 
         y = highpass_filter(y, sr)
         duration_sec = float(librosa.get_duration(y=y, sr=sr))
-        print(f"[DEBUG] Audio duration: {duration_sec}s")
+        app_logger.debug(f"Audio duration: {duration_sec}s")
 
         # 2. Beat tracking
         # オンセット検出（BPM検出・位相検出の両方で使用）
+        # パラメータ調整: より多くのオンセットを検出するために感度を上げる
         onset_env = librosa.onset.onset_strength(y=y, sr=sr)
         onset_frames_detected = librosa.onset.onset_detect(
-            onset_envelope=onset_env, sr=sr, units='frames'
+            onset_envelope=onset_env, sr=sr, units='frames',
+            backtrack=True, pre_max=3, post_max=3  # 感度向上
         )
         onset_set = set(onset_frames_detected.tolist())
         total_frames = len(onset_env)
         num_onsets = len(onset_frames_detected)
-        print(f"[DEBUG] Detected {num_onsets} onsets in {total_frames} frames")
+        app_logger.debug(f"Detected {num_onsets} onsets in {total_frames} frames")
 
         octave_factor = 1.0  # オクターブ補正時に更新される
         phase_detect_bpm = None  # 位相検出用のBPM（オクターブ補正前）
@@ -1494,14 +2018,22 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
         if forced_bpm is not None:
             bpm = forced_bpm
             beat_frames = []
-            print(f"[DEBUG] Using forced BPM: {bpm:.1f}")
+            app_logger.debug(f"Using forced BPM: {bpm:.1f}")
         else:
-            print("[DEBUG] Detecting BPM...")
+            app_logger.debug("Detecting BPM...")
+
+            # === バス帯域BPM検出（一時的に無効化） ===
+            # 注: バス帯域BPM検出はオクターブ誤検出の問題があるため、一時的に無効化
+            # 将来的に改良されたアルゴリズムで再実装予定
+            app_logger.debug("Skipping bass-focused BPM detection (disabled due to octave issues)")
+
+            # === 全帯域BPM検出（従来） ===
+            app_logger.debug("Full-band BPM detection...")
 
             # BPM 60-240を1刻みでスキャンし、F1スコアが最大のBPMを選択
             best_bpm = 120.0
             best_score = -1.0
-            tolerance = 3
+            tolerance = 4  # 感度向上: より広い許容範囲
             top_candidates = []
 
             for c in range(60, 241):
@@ -1547,7 +2079,7 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
             # 上位5候補をログ出力
             top_candidates.sort(key=lambda x: x[1], reverse=True)
             for c, s, p, r in top_candidates[:5]:
-                print(f"[DEBUG] BPM candidate: {c} (P={p:.3f} R={r:.3f} Fb={s:.3f})")
+                app_logger.debug(f"BPM candidate: {c} (P={p:.3f} R={r:.3f} Fb={s:.3f})")
 
             # Stage 2: 自己相関ベースのBPMリファインメント
             coarse_bpm = best_bpm
@@ -1590,20 +2122,20 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
                 if abs(refined_bpm - coarse_bpm) > 5.0:
                     # 粗BPMから離れすぎ → 棄却
                     bpm = coarse_bpm
-                    print(f"[DEBUG] AC peak too far ({refined_bpm:.1f}), keeping coarse {coarse_bpm:.0f}")
+                    app_logger.debug(f"AC peak too far ({refined_bpm:.1f}), keeping coarse {coarse_bpm:.0f}")
                 elif abs(refined_bpm - coarse_bpm) < 1.0:
                     # 1BPM未満の差 → ACリファイン結果を採用（累積ドリフト防止）
                     bpm = round(refined_bpm, 2)
-                    print(f"[DEBUG] AC refined={refined_bpm:.2f} (delta<1), using refined {bpm:.2f} "
+                    app_logger.debug(f"AC refined={refined_bpm:.2f} (delta<1), using refined {bpm:.2f} "
                           f"(lag={refined_lag:.2f}, ac={ac_confidence:.3f})")
                 else:
                     # 1-5 BPMの差 → ACリファイン結果を採用
                     bpm = round(refined_bpm, 2)
-                    print(f"[DEBUG] BPM refined via autocorrelation: {coarse_bpm:.0f} -> {bpm:.2f} "
+                    app_logger.debug(f"BPM refined via autocorrelation: {coarse_bpm:.0f} -> {bpm:.2f} "
                           f"(lag={refined_lag:.2f}, ac={ac_confidence:.3f}, coarse_Fb={coarse_f1:.3f})")
             else:
                 bpm = coarse_bpm
-                print(f"[DEBUG] Audio too short for AC refinement, keeping coarse BPM: {coarse_bpm:.0f}")
+                app_logger.debug(f"Audio too short for AC refinement, keeping coarse BPM: {coarse_bpm:.0f}")
 
             del onset_env_fine, ac
             beat_frames = []
@@ -1667,10 +2199,63 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
                           f"(ac={det_bass_val:.3f}, prior={prior_det:.1f}, "
                           f"score={score_det:.3f})")
                     if score_bass > score_det * 1.05:
-                        print(f"[BassTempoCorrection] {bpm:.1f} → "
-                              f"{best_bass_bpm:.0f} BPM")
-                        bpm = best_bass_bpm
-                        octave_factor = 1.0
+                        ratio = min(best_bass_bpm, bpm) / max(best_bass_bpm, bpm)
+                        VALID_RATIOS = [0.5, 1.0/3, 0.25, 2.0/3]  # 0.75 を除外：半テンポ補正を優先
+                        TOLERANCE = 0.05  # 厳格化: 0.75（半テンポ）を拒絶
+                        is_valid_ratio = any(abs(ratio - r) < TOLERANCE for r in VALID_RATIOS)
+                        if is_valid_ratio:
+                            print(f"[BassTempoCorrection] {bpm:.1f} → {best_bass_bpm:.0f} BPM "
+                                  f"(ratio={ratio:.3f}, valid ratio = {r:.3f})")
+                            bpm = best_bass_bpm
+                            octave_factor = 1.0
+                        else:
+                            candidate_3_2 = best_bass_bpm * 1.5
+                            if abs(candidate_3_2 - bpm) / bpm < 0.05:  # 3/2 補正を厳格化
+                                # best_bass_bpm は step=2 BPM スキャン (±1 BPM 精度)
+                                # hop=128 の bass AC + parabolic interpolation で精密化してから 3/2 補正
+                                try:
+                                    hop_fine = 128
+                                    _y_bass_fine = lowpass_filter(y, sr, cutoff_hz=200)
+                                    _y_bass_fine = highpass_filter(_y_bass_fine, sr, cutoff_hz=20)
+                                    _bass_env_fine = librosa.onset.onset_strength(
+                                        y=_y_bass_fine, sr=sr, hop_length=hop_fine)
+                                    del _y_bass_fine
+                                    _ac_fine = librosa.autocorrelate(_bass_env_fine)
+                                    del _bass_env_fine
+                                    if _ac_fine[0] > 0:
+                                        _ac_fine = _ac_fine / _ac_fine[0]
+                                    _fine_lag_center = 60.0 * sr / (best_bass_bpm * hop_fine)
+                                    _fine_radius = max(3, int(_fine_lag_center * 0.03))
+                                    _fine_lo = max(1, int(_fine_lag_center) - _fine_radius)
+                                    _fine_hi = min(len(_ac_fine) - 2, int(_fine_lag_center) + _fine_radius)
+                                    refined_bass_bpm = best_bass_bpm
+                                    if _fine_hi > _fine_lo:
+                                        _pk = _fine_lo + int(np.argmax(_ac_fine[_fine_lo:_fine_hi + 1]))
+                                        if 0 < _pk < len(_ac_fine) - 1:
+                                            _a = float(_ac_fine[_pk - 1])
+                                            _b = float(_ac_fine[_pk])
+                                            _g = float(_ac_fine[_pk + 1])
+                                            _denom = _a - 2.0 * _b + _g
+                                            _delta = 0.5 * (_a - _g) / _denom if abs(_denom) > 1e-10 else 0.0
+                                            _rl = _pk + _delta
+                                            _rb = 60.0 * sr / (_rl * hop_fine) if _rl > 0 else best_bass_bpm
+                                            if abs(_rb - best_bass_bpm) < 2.0:
+                                                refined_bass_bpm = _rb
+                                    del _ac_fine
+                                    refined_candidate = refined_bass_bpm * 1.5
+                                    print(f"[BassTempoCorrection] {bpm:.1f} → {refined_candidate:.2f} BPM "
+                                          f"(bass={best_bass_bpm:.0f} → {refined_bass_bpm:.2f} × 3/2, "
+                                          f"ratio={ratio:.3f} invalid)")
+                                    bpm = refined_candidate
+                                except Exception as _e:
+                                    print(f"[BassTempoCorrection] {bpm:.1f} → {candidate_3_2:.1f} BPM "
+                                          f"(bass={best_bass_bpm:.0f} × 3/2, ratio={ratio:.3f} invalid, "
+                                          f"refinement failed: {_e})")
+                                    bpm = candidate_3_2
+                                octave_factor = 1.0
+                            else:
+                                print(f"[BassTempoCheck] Ratio {ratio:.3f} not valid musical ratio, "
+                                      f"keeping {bpm:.1f} BPM")
                     else:
                         print(f"[BassTempoCheck] Keeping {bpm:.1f} BPM "
                               f"(bass advantage insufficient)")
@@ -1686,19 +2271,20 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
                 # グローバルビートグリッド: forced_phase + n * seg_dur
                 # このチャンク内の最初のビート位置を求める
                 beat_dur = 60.0 / bpm
-                seg_dur = beat_dur * 2  # 2 beats per beat_times entry
+                _bps_for_phase = forced_beats_per_seg if forced_beats_per_seg is not None else 2
+                seg_dur = beat_dur * _bps_for_phase
                 elapsed = offset_sec - forced_phase
                 if elapsed > 0:
                     remainder = elapsed % seg_dur
                     phase_offset_sec = (seg_dur - remainder) if remainder > 1e-6 else 0.0
                 else:
                     phase_offset_sec = forced_phase - offset_sec
-                print(f"[DEBUG] Beat phase offset: {phase_offset_sec*1000:.1f}ms "
+                app_logger.debug(f"Beat phase offset: {phase_offset_sec*1000:.1f}ms "
                       f"(local phase for chunk at offset={offset_sec:.1f}s, "
                       f"global phase={forced_phase*1000:.1f}ms)")
             else:
                 phase_offset_sec = forced_phase
-                print(f"[DEBUG] Beat phase offset: {phase_offset_sec*1000:.1f}ms (forced from chunk 0)")
+                app_logger.debug(f"Beat phase offset: {phase_offset_sec*1000:.1f}ms (forced from chunk 0)")
             del onset_set
             # onset_env は後述の共通 del で解放
             _progress(35)
@@ -1730,7 +2316,7 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
                     best_phase = phase
 
             phase_offset_sec = best_phase * 512 / sr
-            print(f"[DEBUG] Beat phase offset: {phase_offset_sec*1000:.1f}ms (detected at {_phase_bpm:.1f}BPM, precision={best_phase_score:.4f})")
+            app_logger.debug(f"Beat phase offset: {phase_offset_sec*1000:.1f}ms (detected at {_phase_bpm:.1f}BPM, precision={best_phase_score:.4f})")
             del onset_set
             _progress(35)
 
@@ -1745,14 +2331,16 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
             phase_offset_sec = refined_phase
 
         # 3. Chroma
-        print("[DEBUG] Computing chroma (HPSS + n_fft=4096)...")
+        app_logger.debug("Computing chroma (CQT + HPSS, bins_per_octave=36)...")
         hop_length = 2048  # 4096→2048: 時間解像度2倍（~93ms@22050Hz）
-        chroma = compute_chroma_log(y, sr, hop_length=hop_length)
-        print(f"mem after chroma: {mem_mb():.1f} MB")
+        chroma = compute_chroma_cqt(y, sr, hop_length=hop_length)
+        chroma = apply_chroma_contrast(chroma, filter_size=50)  # ペダルトーン除去
+        app_logger.info(f"mem after chroma: {mem_mb():.1f} MB")
 
         bass_chroma = compute_bass_chroma(y, sr, hop_length=hop_length)
-        print(f"mem after bass chroma: {mem_mb():.1f} MB")
-        print(f"[DEBUG] Chroma shape: {chroma.shape}, Bass chroma shape: {bass_chroma.shape}")
+        bass_chroma = apply_chroma_contrast(bass_chroma, filter_size=50)  # ペダルトーン除去
+        app_logger.info(f"mem after bass chroma: {mem_mb():.1f} MB")
+        app_logger.debug(f"Chroma shape: {chroma.shape}, Bass chroma shape: {bass_chroma.shape}")
         _progress(60) # Chroma done
 
         if chroma.shape[1] == 0:
@@ -1765,6 +2353,75 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
         # Calculate beat duration for diagnostics
         beat_duration = 60.0 / bpm
         target_segment_duration = beat_duration * 2
+
+        # --- ハイブリッド BPM 検出の統合 ---
+        # 既存の BPM 検出結果とハイブリッド方法を比較し、より良い結果を採用
+        app_logger.debug("Integrating hybrid BPM detection...")
+        try:
+            # 元のBPMを中心に±40 BPMの範囲でハイブリッド検出を実行
+            # これにより、1.5倍速の誤検出（例: 105 BPM → 156 BPM）を防止
+            bpm_search_min = max(60, int(bpm - 40))
+            bpm_search_max = min(240, int(bpm + 40))
+            app_logger.info(f"[Hybrid BPM] Searching BPM range: {bpm_search_min}-{bpm_search_max} (around original {bpm:.1f} BPM)")
+
+            hybrid_bpm, dl_confidence = detect_bpm_with_deep_learning(y, sr, bpm_range=(bpm_search_min, bpm_search_max))
+            app_logger.info(f"[Hybrid BPM] DL result: {hybrid_bpm:.1f} BPM (confidence: {dl_confidence:.3f})")
+
+            # ディープラーニングの信頼度が高い（>0.9）場合は、その結果を優先して採用
+            # これは、全帯域オンセットが細かいリズムを誤検出する場合（例: 105 BPM → 78 BPM）に有効
+            if dl_confidence > 0.9:
+                ratio = hybrid_bpm / bpm
+                app_logger.info(f"[Hybrid BPM] High confidence DL result ({dl_confidence:.3f}): {hybrid_bpm:.1f} BPM (vs original {bpm:.1f} BPM, ratio={ratio:.2f}x) -> USING DL RESULT")
+                bpm = hybrid_bpm
+            else:
+                # 信頼度が低い場合、既存のロジックを使用
+                app_logger.info(f"[Hybrid BPM] DL confidence too low ({dl_confidence:.3f}), using original logic")
+
+                # オクターブ誤検出チェック: ハイブリッド結果が元のBPMの1.4-1.6倍の場合、
+                # 本来のBPMは半速（÷1.5）の可能性が高い
+                ratio = hybrid_bpm / bpm
+                if 1.4 <= ratio <= 1.6:
+                    half_speed = bpm / 1.5  # 本来のBPM候補
+                    if 60 <= half_speed <= 200:
+                        app_logger.info(f"[Hybrid BPM] Detected potential 1.5x speed error: {bpm:.1f} -> {hybrid_bpm:.1f} BPM")
+                        app_logger.info(f"[Hybrid BPM] Original BPM {bpm:.1f} is likely 1.5x faster than actual {half_speed:.1f} BPM")
+                        app_logger.info(f"[Hybrid BPM] Keeping original {bpm:.1f} BPM for octace verification")
+
+                # 既存の BPM が範囲外（<60 or >240）の場合、ハイブリッド結果を採用
+                # 範囲内の場合、元のBPMを優先（中速バイアスを削除）
+                if bpm < 60 or bpm > 240:
+                    app_logger.info(f"[Hybrid BPM] Using hybrid result: {hybrid_bpm:.1f} BPM (original {bpm:.1f} BPM out of valid range)")
+                    bpm = hybrid_bpm
+                else:
+                    # 元のBPMが有効範囲内の場合、ハイブリッド結果を参考にするが元のBPMを優先
+                    # ハイブリッド結果が元のBPMの±10%以内の場合のみ採用を検討
+                    ratio = hybrid_bpm / bpm
+                    if 0.9 <= ratio <= 1.1:
+                        # 両方が近い場合、より中速（120-180）に近い方を採用
+                        ideal_bpm = 150.0
+                        hybrid_distance = abs(hybrid_bpm - ideal_bpm)
+                        original_distance = abs(bpm - ideal_bpm)
+
+                        if hybrid_distance < original_distance * 0.95:  # より厳しい条件
+                            app_logger.info(f"[Hybrid BPM] Using hybrid result: {hybrid_bpm:.1f} BPM (closer to ideal {ideal_bpm} BPM)")
+                            bpm = hybrid_bpm
+                        else:
+                            app_logger.info(f"[Hybrid BPM] Keeping original: {bpm:.1f} BPM (already optimal)")
+                    else:
+                        # 差が大きい場合、元のBPMを維持
+                        app_logger.info(f"[Hybrid BPM] Keeping original: {bpm:.1f} BPM (hybrid {hybrid_bpm:.1f} BPM differs by {ratio:.2f}x)")
+
+            # BPM が更新された場合、beat_duration を再計算
+            beat_duration = 60.0 / bpm
+            target_segment_duration = beat_duration * 2
+
+        except Exception as e:
+            app_logger.error(f"[Hybrid BPM] Error in hybrid detection: {e}, using original {bpm:.1f} BPM")
+            import traceback
+            traceback.print_exc()
+            # ハイブリッド方法が失敗した場合、既存の結果を使用
+
+        # --- ハイブリッド BPM 検出ここまで ---
         total_duration = librosa.frames_to_time(chroma.shape[1], sr=sr, hop_length=hop_length)
 
         # --- Adaptive Beat Tracking ---
@@ -1776,7 +2433,7 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
             # beat_timesは1拍間隔で生成（aggregate_chroma_per_segmentがbeats_per_segmentでグループ化するため）
             beat_times = np.arange(phase_offset_sec, total_duration + target_segment_duration, beat_duration)
             beats_per_seg = forced_beats_per_seg if forced_beats_per_seg is not None else 2
-            print(f"[DEBUG] Using fixed grid (forced_phase): beats_per_seg={beats_per_seg}, seg_dur={target_segment_duration:.3f}s")
+            app_logger.debug(f"Using fixed grid (forced_phase): beats_per_seg={beats_per_seg}, seg_dur={target_segment_duration:.3f}s")
         else:
             # 初回チャンク: adaptive beat tracking
             try:
@@ -1785,52 +2442,62 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
                 try:
                     _ = onset_env
                 except NameError:
-                    onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=bt_hop)
+                    onset_env = librosa.onset.onset_strength(
+                        y=y, sr=sr, hop_length=bt_hop,
+                        aggregate=np.median,  # 中央値の使用（外れ値の影響を軽減）
+                        max_size=5  # 拡張: さらにノイズ抑制（162 BPM のような中速テンポで精度向上）
+                    )
 
+                # ビートトラッキング安定化: tightness と start_bpm を設定
                 _, bt_frames = librosa.beat.beat_track(
                     onset_envelope=onset_env, sr=sr, hop_length=bt_hop,
-                    bpm=bpm, trim=False
+                    bpm=bpm, trim=False,
+                    tightness=150,  # 安定したテンポを優先
+                    start_bpm=120.0  # 一般的な初期テンポ
                 )
                 bt_times = librosa.frames_to_time(bt_frames, sr=sr, hop_length=bt_hop)
 
                 if len(bt_times) >= 4:
-                    # ビートトラッカー成功: 実際のビート位置を使用
-                    # beats_per_segment=4 で4ビート(1小節)ずつグループ化
-                    beat_times = bt_times
-                    beats_per_seg = 4
+                    # ビートトラッカー成功: adaptive BPM を取得し、
+                    # BarPhaseRefine で求めたダウンビート位相を起点に固定グリッドを生成
+                    # BPM は変更しない（median interval は missed beats により inflate するため信頼性が低い）
                     avg_beat_interval = float(np.median(np.diff(bt_times)))
-                    print(f"[DEBUG] Adaptive beat tracking: {len(bt_times)} beats, "
+                    beat_times = np.arange(phase_offset_sec, total_duration + target_segment_duration, beat_duration)
+                    beats_per_seg = 4
+                    app_logger.debug(f"Adaptive beat tracking: {len(bt_times)} beats, "
                           f"median interval={avg_beat_interval:.3f}s "
-                          f"(≈{60.0/avg_beat_interval:.1f} BPM)")
+                          f"(≈{60.0/avg_beat_interval:.1f} BPM), "
+                          f"phase-aligned from {phase_offset_sec*1000:.1f}ms, "
+                          f"grid step={beat_duration:.4f}s (BPM={bpm:.1f})")
                 else:
                     # ビートが少なすぎる → 固定グリッドにフォールバック
                     # beat_timesは1拍間隔で生成（aggregate_chroma_per_segmentがbeats_per_segmentでグループ化するため）
                     beat_times = np.arange(phase_offset_sec, total_duration + target_segment_duration, beat_duration)
                     beats_per_seg = 2
-                    print(f"[DEBUG] Beat tracker returned too few beats ({len(bt_times)}), using fixed grid")
+                    app_logger.debug(f"Beat tracker returned too few beats ({len(bt_times)}), using fixed grid")
             except Exception as e:
                 # ビートトラッカーエラー → 固定グリッドにフォールバック
                 # beat_timesは1拍間隔で生成（aggregate_chroma_per_segmentがbeats_per_segmentでグループ化するため）
                 beat_times = np.arange(phase_offset_sec, total_duration + target_segment_duration, beat_duration)
                 beats_per_seg = 2
-                print(f"[DEBUG] Beat tracker failed ({e}), using fixed grid")
+                app_logger.debug(f"Beat tracker failed ({e}), using fixed grid")
 
         del onset_env  # メモリ解放
 
         num_segments = max(1, len(beat_times) - 1)
-        print(f"[DEBUG] BPM: {bpm:.2f}, Beat duration: {beat_duration:.3f}s, Segments: ~{num_segments}")
+        app_logger.debug(f"BPM: {bpm:.2f}, Beat duration: {beat_duration:.3f}s, Segments: ~{num_segments}")
 
         # 5. Aggregate per segment
-        print("[DEBUG] Aggregating segments...")
+        app_logger.debug("Aggregating segments...")
         main_matrix, segments = aggregate_chroma_per_segment(chroma, times, beat_times, beats_per_segment=beats_per_seg)
         bass_matrix, _ = aggregate_chroma_per_segment(bass_chroma, times, beat_times, beats_per_segment=beats_per_seg)
-        print(f"[DEBUG] Segments: {len(segments)}")
+        app_logger.debug(f"Segments: {len(segments)}")
         _progress(75) # Aggregation done
 
         # 6. Key estimation
         key_root, key_mode = estimate_key_from_chroma(chroma)
         estimated_key = f"{key_root}{key_mode}"
-        print(f"[DEBUG] Key: {estimated_key}")
+        app_logger.debug(f"Key: {estimated_key}")
 
         # 7. Diatonic penalty
         diatonic_chords = set(get_diatonic_chords_for_key(key_root, key_mode))
@@ -1839,51 +2506,40 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
             dtype=bool
         )
 
-        # 8. Detection
-        print("[DEBUG] Detecting chords...")
-        raw_chords, final_last_chord, final_run_length = detect_chords_matrix(
+        # 8. Detection (HMM + Viterbi)
+        app_logger.debug("Detecting chords (HMM/Viterbi)...")
+        smoothed_chords, final_last_chord, final_run_length = detect_chords_hmm(
             main_matrix,
             bass_matrix,
             penalty_mask=penalty_mask,
-            penalty_value=0.20,   # 0.15→0.20: 非diatonicコードへのペナルティ強化
-            main_weight=0.6,      # 0.7→0.6: ベースクロマ復活に合わせて調整
-            bass_weight=0.35,     # 0.4→0.35: ベース過剰強調を緩和
-            forced_last_chord=forced_last_chord,
-            forced_run_length=forced_run_length,
+            penalty_value=0.20,
+            main_weight=0.55,
+            bass_weight=0.25,  # 0.50→0.25: contrast 正規化後はペダルトーン増幅不要
+            temperature=4.0,   # 8.0→4.0: emission の過度な一極集中を緩和
+            _forced_last_chord=forced_last_chord,
+            _forced_run_length=forced_run_length,
         )
-        print(f"[DEBUG] Raw chords detected: {len(raw_chords)}")
-        _progress(90) # Detection done
+        app_logger.debug(f"HMM chords detected: {len(smoothed_chords)}")
+        _progress(90)
 
-        # 最大停滞を計算するヘルパー関数
+        # Safety net: HMM が同コードに固着した場合の最終防衛（旧 max=4 → 新 max=8 で緩く設定）
+        smoothed_chords = break_long_stagnation_runs(
+            smoothed_chords, max_consecutive=8, diatonic_chords=list(diatonic_chords)
+        )
+
         def calc_max_run(chords):
-            max_run = 1
-            current_run = 1
+            max_run, current_run = 1, 1
             for i in range(1, len(chords)):
-                if chords[i] == chords[i-1]:
+                if chords[i] == chords[i - 1]:
                     current_run += 1
                     max_run = max(max_run, current_run)
                 else:
                     current_run = 1
             return max_run
 
-        # 各処理段階の最大停滞を追跡
-        raw_max = calc_max_run(raw_chords)
-        print(f"[DEBUG] Raw chords max stagnation: {raw_max} bars")
-
-        # Use stagnation-aware smoothing to prevent creating long runs
-        smoothed_chords = smooth_chord_sequence_stagnation_aware(raw_chords, passes=2, max_run=4)
-
-        smoothed_max = calc_max_run(smoothed_chords)
-        print(f"[DEBUG] After stagnation-aware smoothing: {smoothed_max} bars")
-
-        # Additional safety net: break any remaining long runs
-        smoothed_chords = break_long_stagnation_runs(smoothed_chords, max_consecutive=4)
-
-        final_max = calc_max_run(smoothed_chords)
-        print(f"[DEBUG] After break_long_stagnation_runs: {final_max} bars")
-
-        print(f"[DEBUG] unique chords: {len(set(smoothed_chords))}")
-        print(f"[DEBUG] first 20 chords: {smoothed_chords[:20]}")
+        app_logger.debug(f"HMM max stagnation: {calc_max_run(smoothed_chords)} bars")
+        app_logger.debug(f"unique chords: {len(set(smoothed_chords))}")
+        app_logger.debug(f"first 20 chords: {smoothed_chords[:20]}")
 
         bars = []
         for i, chord_name in enumerate(smoothed_chords):
@@ -1921,7 +2577,7 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
                 "end_sec": float(end_sec)
             })
         
-        print(f"[DEBUG] Analysis complete. Returning {len(bars)} bars.")
+        app_logger.debug(f"Analysis complete. Returning {len(bars)} bars.")
         _progress(99)
         return {
             "bpm": bpm,
@@ -1933,6 +2589,7 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
             "final_last_chord": final_last_chord,
             "final_run_length": final_run_length,
             "beats_per_segment": beats_per_seg,
+            "beat_times": [float(t) for t in beat_times] if beat_times is not None else [],
         }
 
     except Exception as e:
@@ -1970,15 +2627,16 @@ def startup_event():
         pass
 
 def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode.PREVIEW, source: str = "upload"):
+    app_logger.info(f"[run_analysis_bg] Starting analysis job {job_id}, mode={mode}, source={source}")
     cleanup_jobs()
-    
+
     # Init progress (Store mode in job)
     jobs[job_id] = {
         **jobs.get(job_id, {}),
         "status": "analyzing",
         "mode": mode,
         # Use 0.01 (1%) as "Started" signal. 0.0 might be confused with "not started"
-        "progress": 0.01, 
+        "progress": 0.01,
         "updated_at": time.time(),
         "started_at": time.time()
     }
@@ -2004,13 +2662,13 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
         if mode == AnalyzeMode.PREVIEW:
              # Force 60s hardcap (ignore environment or input)
              MAX_ANALYSIS_SEC = 60.0
-             print("[INFO] Mode: PREVIEW -> Forced duration 60.0s")
+             app_logger.info(f"[run_analysis_bg] Mode: PREVIEW -> Forced duration 60.0s")
         elif mode == AnalyzeMode.EARLY_ACCESS:
              MAX_ANALYSIS_SEC = float(os.getenv("MAX_ANALYSIS_SEC", "300"))
-             print(f"[INFO] Mode: EARLY_ACCESS -> Max duration {MAX_ANALYSIS_SEC}s")
+             app_logger.info(f"[run_analysis_bg] Mode: EARLY_ACCESS -> Max duration {MAX_ANALYSIS_SEC}s")
         else:  # FULL
              MAX_ANALYSIS_SEC = float(os.getenv("MAX_ANALYSIS_SEC", "600"))
-             print(f"[INFO] Mode: FULL -> Max duration {MAX_ANALYSIS_SEC}s")
+             app_logger.info(f"[run_analysis_bg] Mode: FULL -> Max duration {MAX_ANALYSIS_SEC}s")
 
         # 2. Usage Check (Early Access)
         if mode == AnalyzeMode.EARLY_ACCESS:
@@ -2029,6 +2687,7 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
         beats_per_seg = None  # Track beats_per_segment from first chunk
 
         all_bars: list[dict] = []
+        all_beat_times: list[float] = []  # 全チャンクのビートタイムスタンプを統合
         key_votes: list[str] = []
         stag_last_chord: str | None = None
         stag_run_length: int | None = None
@@ -2084,6 +2743,23 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
             stag_last_chord = raw.get("final_last_chord")
             stag_run_length = raw.get("final_run_length")
 
+            # beat_times を統合
+            chunk_beat_times = raw.get("beat_times", [])
+            if chunk_beat_times:
+                # チャンクのオフセットを適用して絶対時間に変換
+                chunk_beat_times_abs = [offset + t for t in chunk_beat_times]
+
+                # 重複を除外して追加（チャンク境界での重複を防ぐ）
+                if all_beat_times:
+                    # 前回の最後のビートと重複している場合、最初のビートをスキップ
+                    last_beat = all_beat_times[-1]
+                    if chunk_beat_times_abs and abs(chunk_beat_times_abs[0] - last_beat) < 0.001:  # 1ms未満なら重複とみなす
+                        all_beat_times.extend(chunk_beat_times_abs[1:])
+                    else:
+                        all_beat_times.extend(chunk_beat_times_abs)
+                else:
+                    all_beat_times.extend(chunk_beat_times_abs)
+
             # 最初のチャンクからBPMと位相を取得
             if bpm is None:
                 bpm = raw.get("bpm", 120.0)
@@ -2091,7 +2767,7 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
                 beats_per_seg = raw.get("beats_per_segment", 2)  # Extract beats_per_segment
                 seconds_per_beat = 60.0 / bpm
                 segment_duration = seconds_per_beat * beats_per_seg
-                print(f"[ChunkMerge] Using detected BPM: {bpm:.1f}, phase: {forced_phase*1000:.1f}ms, "
+                app_logger.info(f"[ChunkMerge] Using detected BPM: {bpm:.1f}, phase: {forced_phase*1000:.1f}ms, "
                       f"beats_per_seg: {beats_per_seg}, segment_duration: {segment_duration:.3f}s")
 
             for i, bar in enumerate(chunk_bars):
@@ -2166,6 +2842,57 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
             print(f"[ChunkMerge] Bar duration: {_diag_dur}s (per-chunk timing, expected ~{_expected}s @ {beats_used} beats/segment)")
             print(f"[ChunkMerge] Total bars: {len(all_bars)}, first={all_bars[0]['start_sec']:.4f}s, last_end={all_bars[-1]['end_sec']:.4f}s")
 
+        # beat_times が空の場合のフォールバック
+        if not all_beat_times:
+            app_logger.warning("[ChunkMerge] No beat_times available, generating from BPM")
+            seconds_per_beat = 60.0 / bpm
+            all_beat_times = [i * seconds_per_beat for i in range(int(bpm * offset / 60) + 2)]
+            app_logger.info(f"[ChunkMerge] Generated {len(all_beat_times)} beat times from BPM {bpm:.1f}")
+        else:
+            # beat_times の妥当性チェック（ソート済み確認）
+            all_beat_times = sorted(all_beat_times)
+            app_logger.info(f"[ChunkMerge] Merged {len(all_beat_times)} beat times")
+
+        # beat_times から実際の BPM を再計算（beat_times が存在する場合）
+        if all_beat_times and len(all_beat_times) > 10:  # 少なくとも10ビート必要
+            # 安定したビート間隔を中央値で計算（外れ値除外）
+            beat_intervals = np.diff(all_beat_times)
+            # 中央値（外れ値に強い統計指標）
+            median_interval = np.median(beat_intervals)
+
+            # ヒストグラム分析で最頻出現ビート間隔を取得（外れ値に強い）
+            hist, bin_edges = np.histogram(beat_intervals, bins=50, density=True)
+            most_common_interval_idx = np.argmax(hist)
+            mode_interval = (bin_edges[most_common_interval_idx] + bin_edges[most_common_interval_idx + 1]) / 2
+            mode_bpm = 60.0 / mode_interval
+
+            app_logger.info(f"[ModeBPM] Mode interval = {mode_interval:.3f}s, Mode BPM = {mode_bpm:.1f}")
+
+            # 中央値とモードの平均を取る（安定性向上）
+            avg_interval = (median_interval + mode_interval) / 2
+            calculated_bpm = 60.0 / avg_interval
+
+            # 異常な間隔（外れ値）を除外した平均を計算
+            # 中央値の 20% 以外の間隔は外れ値とみなす
+            valid_intervals = [dt for dt in beat_intervals if abs(dt - avg_interval) < 0.2 * avg_interval]
+
+            if valid_intervals:
+                final_avg_interval = np.mean(valid_intervals)
+                final_bpm = 60.0 / final_avg_interval
+
+                # BPM が合理的な範囲（60-240 BPM）内の場合のみ上書き
+                if 60 <= final_bpm <= 240:
+                    app_logger.info(f"[DynamicBPM] Calculated: {final_bpm:.1f} BPM "
+                          f"(mode={mode_bpm:.1f}, median={60.0/median_interval:.1f}, avg={calculated_bpm:.1f})")
+                    app_logger.warning(f"[DynamicBPM] OVERWRITING BPM: {bpm:.1f} -> {final_bpm:.1f}")
+                    bpm = final_bpm
+                else:
+                    app_logger.info(f"[DynamicBPM] Calculated BPM {final_bpm:.1f} out of range [60-240], keeping {bpm:.1f}")
+            else:
+                app_logger.info(f"[DynamicBPM] Not enough valid intervals, keeping {bpm:.1f}")
+        else:
+            app_logger.info(f"[DynamicBPM] Not enough beat_times ({len(all_beat_times) if all_beat_times else 0}), keeping {bpm:.1f}")
+
         final_result = {
             "bpm": bpm,
             "duration_sec": round(offset, 1),
@@ -2177,7 +2904,8 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
             "analyzed_duration_sec": round(offset, 1),
             "export_allowed": (mode == AnalyzeMode.EARLY_ACCESS or mode == AnalyzeMode.FULL),
             "bars": all_bars, # Return bars even in Preview (limited by duration cap)
-            "_build": "build-v5.5.1",
+            "beat_times": all_beat_times,
+            "_build": "build-v5.6.0",
         }
         if source == "url" and os.path.exists(file_path):
             final_result["audio_url"] = "/temp/" + os.path.basename(file_path)
@@ -2314,10 +3042,11 @@ async def analyze_url(
     cookies: UploadFile | None = File(None),
     background_tasks: BackgroundTasks = None
 ):
+    app_logger.debug(f"analyze_url endpoint called: url={url}, mode={mode}, cookies={'yes' if cookies else 'none'}")
     if mode is None:
-         print("[WARN] Missing mode in /analyze/url request. Fallback to EARLY_ACCESS.")
+         app_logger.warning("Missing mode in /analyze/url request. Fallback to EARLY_ACCESS.")
          mode = AnalyzeMode.EARLY_ACCESS
-    
+
     return await _process_analyze_url(url, mode, cookies)
 
 @app.post("/analyze/url/preview")
@@ -2330,37 +3059,75 @@ async def analyze_url_preview(
 
 async def _process_analyze_url(url: str, mode: AnalyzeMode, cookies: UploadFile | None):
     cleanup_jobs()
-    
+
     cookie_path = None
     try:
         # Validate and save cookies if provided
+        app_logger.debug(f"_process_analyze_url called: url={url}, mode={mode}, cookies={'yes' if cookies else 'none'}")
+
         if cookies:
+            app_logger.debug(f"Cookies file received: filename={cookies.filename}, content_type={cookies.content_type}")
+
             if not cookies.filename.endswith(".txt"):
                 raise HTTPException(status_code=400, detail="Cookie file must be a .txt file")
-            
+
+            # 拡張子を抽出（ファイル名に括弧が含まれる場合の対策）
             suffix = os.path.splitext(cookies.filename)[1]
+            if not suffix:
+                suffix = ".txt"
+
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                 size = 0
                 while True:
-                    chunk = cookies.file.read(1024 * 1024) 
+                    chunk = cookies.file.read(1024 * 1024)
                     if not chunk:
                         break
                     size += len(chunk)
-                    if size > 1024 * 1024 * 1: 
+                    if size > 1024 * 1024 * 1:
                         raise HTTPException(status_code=400, detail="Cookie file too large (limit 1MB)")
                     tmp.write(chunk)
                 cookie_path = tmp.name
-            print(f"[DEBUG] cookies loaded: {cookie_path}")
+
+            file_size = os.path.getsize(cookie_path)
+            print(f"[DEBUG] Uploaded cookies saved: {cookie_path} ({file_size} bytes)")
+
+            # クッキーファイルの内容を確認（最初の数行）
+            try:
+                with open(cookie_path, 'r', encoding='utf-8') as f:
+                    first_lines = [f.readline().strip() for _ in range(5)]
+                    print(f"[DEBUG] Cookie file preview: {first_lines}")
+            except Exception as e:
+                print(f"[DEBUG] Could not read cookie file preview: {e}")
+        else:
+            # Cookie ファイルが提供されない場合、自動的に cookies.txt を読み込む
+            cookie_path = get_default_cookies_path()
+            if cookie_path:
+                print(f"[DEBUG] No uploaded cookies, using default cookies.txt: {cookie_path}")
+                if os.path.exists(cookie_path):
+                    file_size = os.path.getsize(cookie_path)
+                    print(f"[DEBUG] Default cookies.txt size: {file_size} bytes")
+                else:
+                    print(f"[DEBUG] Default cookies.txt file does not exist!")
+                    cookie_path = None
+            else:
+                print(f"[DEBUG] No cookies.txt found, will try without cookies")
 
         # Download synchronously (usually fast enough, but ideally this would be part of the job too)
         # However, for MVP, we'll keep download sync to get file_path, then offload analysis.
-        # IF download is > 25s, this might still 502. 
+        # IF download is > 25s, this might still 502.
         # But moving download to BG requires passing 'url' and 'cookie_path' to BG.
         # 'run_analysis_bg' expects 'file_path'.
-        # So we download here. If it times out, it times out. 
-        # User accepted focus on /analyze (file upload). 
+        # So we download here. If it times out, it times out.
+        # User accepted focus on /analyze (file upload).
         # But we can try to be safe.
+
+        print(f"[DEBUG] About to download: URL={url}, Cookie path exists: {cookie_path is not None}")
+        if cookie_path:
+            print(f"[DEBUG] Cookie path: {cookie_path}")
+
         file_path = download_youtube_audio(url, cookie_path=cookie_path)
+
+        print(f"[DEBUG] Download completed successfully: {file_path}")
         
         # Now create job
         job_id = str(uuid.uuid4())
@@ -2379,7 +3146,10 @@ async def _process_analyze_url(url: str, mode: AnalyzeMode, cookies: UploadFile 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"[DEBUG] Exception in _process_analyze_url: {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"エラーが発生しました: {str(e)}")
     
     finally:
         # Secure cleanup of COOKIES only. Audio file is needed for BG task.
@@ -2389,5 +3159,359 @@ async def _process_analyze_url(url: str, mode: AnalyzeMode, cookies: UploadFile 
             except:
                 pass
 
-        
+
+# ============================================================================
+# ハイブリッド BPM 検出機能
+# ============================================================================
+
+def evaluate_tempo_prior_hybrid(bpm: float, target_range: tuple = (140, 170)) -> float:
+    """
+    テンポ事前確率評価（ハイブリッド用）
+
+    Args:
+        bpm: 候補 BPM
+        target_range: 目標範囲 (min, max)
+
+    Returns:
+    テンポ事前確率スコア (0-1)
+    """
+    min_bpm, max_bpm = target_range
+
+    # 目標範囲内であれば高いスコア
+    if min_bpm <= bpm <= max_bpm:
+        mean = (min_bpm + max_bpm) / 2.0
+        std = (max_bpm - min_bpm) / 3.0  # より狭い分布で中速を強調
+        return math.exp(-0.5 * ((bpm - mean) / std) ** 2)
+    else:
+        # 範囲外の場合、距離に応じて減少
+        dist = min(abs(bpm - min_bpm), abs(bpm - max_bpm))
+        return math.exp(-0.5 * (dist / 20.0) ** 2)  # より急激な減衰
+
+
+def detect_bpm_hybrid(y: np.ndarray, sr: int, bpm_range: tuple[int, int] | None = None) -> float:
+    """
+    ハイブリッド BPM 検出（高速・中精度）
+
+    Args:
+        y: 音声信号
+        sr: サンプリングレート
+        bpm_range: BPM検索範囲 (min, max)。Noneの場合はデフォルト範囲(60-200)を使用
+
+    Returns:
+        最終 BPM
+    """
+    app_logger.info("[Hybrid BPM] ハイブリッド BPM 検出開始")
+
+    # 第1段階: 初期 BPM 推定
+    app_logger.info("[Hybrid BPM] Stage 1: 初期 BPM 推定中...")
+
+    # オンセット検出
+    onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=512)
+    onset_frames = librosa.onset.onset_detect(
+        onset_envelope=onset_env,
+        sr=sr,
+        hop_length=512,
+        backtrack=True,
+        pre_max=3,
+        post_max=3
+    )
+
+    app_logger.info(f"[Hybrid BPM] 検出されたオンセット数: {len(onset_frames)}")
+
+    if len(onset_frames) < 2:
+        return 120.0  # デフォルト
+
+    # BPM スキャン（中速範囲に制限）
+    total_frames = len(onset_env)
+    num_onsets = len(onset_frames)
+    onset_set = set(onset_frames)
+
+    best_bpm = 120.0
+    best_score = -1.0
+    tolerance = 4
+
+    # BPM範囲の設定: 指定があれば使用、なければデフォルト範囲
+    if bpm_range is not None:
+        bpm_min, bpm_max = bpm_range
+        # 範囲を有効な範囲に制限
+        bpm_min = max(60, bpm_min)
+        bpm_max = min(240, bpm_max)
+    else:
+        bpm_min, bpm_max = 60, 200
+
+    candidates = []
+
+    BEAT_F_BETA = 0.8
+    beta_sq = BEAT_F_BETA ** 2
+
+    for c in range(bpm_min, bpm_max + 1):
+        beat_period = 60.0 * sr / (c * 512)
+        grid = np.arange(0, total_frames, beat_period)
+
+        if len(grid) == 0:
+            continue
+
+        # Precision
+        hits = 0
+        for g in grid:
+            g_int = int(round(g))
+            for t in range(-tolerance, tolerance + 1):
+                if (g_int + t) in onset_set:
+                    hits += 1
+                    break
+        precision = hits / len(grid)
+
+        # Recall
+        grid_set = set()
+        for g in grid:
+            g_int = int(round(g))
+            for t in range(-tolerance, tolerance + 1):
+                grid_set.add(g_int + t)
+        onset_hits = sum(1 for o in onset_frames if int(o) in grid_set)
+        recall = onset_hits / max(1, num_onsets)
+
+        # F_beta スコア
+        if precision + recall > 0:
+            fb_score = (1 + beta_sq) * precision * recall / (beta_sq * precision + recall)
+        else:
+            fb_score = 0.0
+
+        # テンポ事前確率（強化）
+        tempo_prior = evaluate_tempo_prior_hybrid(c)
+
+        # 統合スコア（テンポ事前確率の重みを増強）
+        score = fb_score * (0.5 + 0.5 * tempo_prior)
+        candidates.append((c, score))
+
+        if score > best_score:
+            best_score = score
+            best_bpm = float(c)
+
+    # 上位候補をログ出力
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    top_candidates = candidates[:10]
+
+    app_logger.info(f"[Hybrid BPM] 上位{len(top_candidates)}候補:")
+    for i, (bpm, score) in enumerate(top_candidates):
+        app_logger.info(f"  {i+1}. {bpm} BPM (score={score:.3f})")
+
+    app_logger.info(f"[Hybrid BPM] 選択された BPM: {best_bpm:.1f} (score={best_score:.3f})")
+
+    return best_bpm
+
+
+# ============================================================================
+# ハイブリッド BPM 検出ここまで
+# ============================================================================
+
+# ============================================================================
+# BPM調整用APIエンドポイント
+# ============================================================================
+
+class BPMAdjustRequest(BaseModel):
+    """BPM調整リクエスト"""
+    bars: list  # 元のバー配列
+    original_bpm: float  # 元のBPM
+    adjusted_bpm: float  # 調整後のBPM
+
+class BPMAdjustResponse(BaseModel):
+    """BPM調整レスポンス"""
+    adjusted_bars: list  # 調整後のバー配列
+    original_bpm: float  # 元のBPM
+    adjusted_bpm: float  # 調整後のBPM
+    adjustment_ratio: float  # 調整比率
+
+@app.post("/bpm/adjust")
+async def adjust_bpm(request: BPMAdjustRequest):
+    """
+    BPM調整用APIエンドポイント
+    ユーザーが指定したBPMに合わせてタブ譜のタイミングを再計算
+    """
+    try:
+        # 調整比率の計算
+        if request.original_bpm <= 0:
+            raise HTTPException(status_code=400, detail="Original BPM must be positive")
+
+        adjustment_ratio = request.original_bpm / request.adjusted_bpm
+
+        # 各バーのタイミングを調整
+        adjusted_bars = []
+        for bar in request.bars:
+            adjusted_bar = {
+                **bar,
+                'start_sec': bar.get('start_sec', 0) * adjustment_ratio,
+                'end_sec': bar.get('end_sec', 0) * adjustment_ratio
+            }
+            adjusted_bars.append(adjusted_bar)
+
+        return BPMAdjustResponse(
+            adjusted_bars=adjusted_bars,
+            original_bpm=request.original_bpm,
+            adjusted_bpm=request.adjusted_bpm,
+            adjustment_ratio=adjustment_ratio
+        )
+
+    except Exception as e:
+        print(f"[ERROR] BPM adjustment failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"BPM adjustment failed: {str(e)}")
+
+# ============================================================================
+# BPM調整用APIエンドポイントここまで
+# ============================================================================
+
+# ============================================================================
+# ディープラーニングBPM検出モデルの統合
+# ============================================================================
+
+# モデルのグローバル変数
+_pytorch_model = None
+_pytorch_device = None
+_pytorch_model_loaded = False
+
+def load_pytorch_bpm_model():
+    """PyTorch BPM検出モデルをロード"""
+    global _pytorch_model, _pytorch_device, _pytorch_model_loaded
+
+    if _pytorch_model_loaded:
+        return _pytorch_model
+
+    try:
+        import torch
+        import torch.nn as nn
+        import torch.nn.functional as F
+
+        # デバイスの設定
+        _pytorch_device = torch.device('cpu')
+
+        # モデル定義
+        class AdvancedBPMDetector(nn.Module):
+            def __init__(self, input_size, num_bpm_classes=181):
+                super(AdvancedBPMDetector, self).__init__()
+                self.conv1 = nn.Conv1d(1, 64, kernel_size=7, padding=3)
+                self.bn1 = nn.BatchNorm1d(64)
+                self.conv2 = nn.Conv1d(64, 128, kernel_size=5, padding=2)
+                self.bn2 = nn.BatchNorm1d(128)
+                self.conv3 = nn.Conv1d(128, 256, kernel_size=3, padding=1)
+                self.bn3 = nn.BatchNorm1d(256)
+                self.global_pool = nn.AdaptiveAvgPool1d(1)
+                self.fc1 = nn.Linear(256, 512)
+                self.dropout1 = nn.Dropout(0.3)
+                self.fc2 = nn.Linear(512, 256)
+                self.dropout2 = nn.Dropout(0.3)
+                self.fc3 = nn.Linear(256, num_bpm_classes)
+
+            def forward(self, x):
+                if x.dim() == 2:
+                    x = x.unsqueeze(1)
+                x = F.relu(self.bn1(self.conv1(x)))
+                x = F.max_pool1d(x, 2)
+                x = F.relu(self.bn2(self.conv2(x)))
+                x = F.max_pool1d(x, 2)
+                x = F.relu(self.bn3(self.conv3(x)))
+                x = F.max_pool1d(x, 2)
+                x = self.global_pool(x)
+                x = x.view(x.size(0), -1)
+                x = F.relu(self.fc1(x))
+                x = self.dropout1(x)
+                x = F.relu(self.fc2(x))
+                x = self.dropout2(x)
+                x = self.fc3(x)
+                return x
+
+        # モデルのロード
+        model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bpm_model_augmented.pth')
+        if not os.path.exists(model_path):
+            app_logger.warning("[DeepLearning] BPM model file not found, using librosa-based detection")
+            return None
+
+        checkpoint = torch.load(model_path, map_location=_pytorch_device, weights_only=False)
+        input_size = checkpoint.get('input_size', 1292)
+
+        _pytorch_model = AdvancedBPMDetector(input_size)
+        _pytorch_model.load_state_dict(checkpoint['model_state_dict'])
+        _pytorch_model.to(_pytorch_device)
+        _pytorch_model.eval()
+
+        _pytorch_model_loaded = True
+        app_logger.info(f"[DeepLearning] BPM model loaded successfully (input_size: {input_size})")
+
+        return _pytorch_model
+
+    except Exception as e:
+        app_logger.error(f"[DeepLearning] Failed to load model: {e}")
+        return None
+
+def detect_bpm_pytorch(y: np.ndarray, sr: int) -> tuple[float, float]:
+    """
+    PyTorchディープラーニングモデルによるBPM検出
+
+    Returns:
+        (検出されたBPM, 信頼度)
+    """
+    global _pytorch_model, _pytorch_device, _pytorch_model_loaded
+
+    # モデルのロード
+    if not _pytorch_model_loaded:
+        model = load_pytorch_bpm_model()
+        if model is None:
+            return 120.0, 0.0  # モデルがない場合はデフォルト値
+
+    import torch
+    import torch.nn.functional as F
+
+    # オンセット強度の計算
+    hop_length = 512
+    onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop_length)
+
+    # 正規化
+    onset_env_normalized = (onset_env - np.mean(onset_env)) / (np.std(onset_env) + 1e-8)
+
+    # テンソルに変換
+    onset_tensor = torch.from_numpy(onset_env_normalized).float().unsqueeze(0).to(_pytorch_device)
+
+    # 予測
+    with torch.no_grad():
+        output = _pytorch_model(onset_tensor)
+        probabilities = F.softmax(output, dim=1)
+        predicted_class = torch.argmax(probabilities, dim=1).item()
+        predicted_bpm = predicted_class + 60
+        confidence = probabilities[0][predicted_class].item()
+
+    app_logger.info(f"[DeepLearning] Detected BPM: {predicted_bpm:.1f} BPM (confidence: {confidence:.3f})")
+
+    return predicted_bpm, confidence
+
+def detect_bpm_with_deep_learning(y: np.ndarray, sr: int, bpm_range: tuple[int, int] | None = None) -> tuple[float, float]:
+    """
+    ディープラーニングモデルを使用したBPM検出
+    モデルが利用可能な場合はディープラーニングを優先、そうでない場合はlibrosaを使用
+
+    Returns:
+        (検出されたBPM, 信頼度)
+    """
+    app_logger.info("[BPM Detection] Checking for deep learning model...")
+
+    try:
+        # ディープラーニングモデルによる検出を試みる
+        dl_bpm, confidence = detect_bpm_pytorch(y, sr)
+
+        # 信頼度が低い（<0.5）の場合はlibrosaにフォールバック
+        if confidence < 0.5:
+            app_logger.info(f"[BPM Detection] Deep learning confidence too low ({confidence:.3f}), using librosa fallback")
+            fallback_bpm = detect_bpm_hybrid(y, sr, bpm_range)
+            return fallback_bpm, confidence
+
+        app_logger.info(f"[BPM Detection] Using deep learning result: {dl_bpm:.1f} BPM (confidence: {confidence:.3f})")
+        return dl_bpm, confidence
+
+    except Exception as e:
+        app_logger.error(f"[BPM Detection] Deep learning failed: {e}, using librosa fallback")
+        fallback_bpm = detect_bpm_hybrid(y, sr, bpm_range)
+        return fallback_bpm, 0.0
+
+# ============================================================================
+# ディープラーニングBPM検出モデルの統合ここまで
+# ============================================================================
 

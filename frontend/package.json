@@ -14,7 +14,8 @@
     "next": "16.0.7",
     "react": "19.2.0",
     "react-dom": "19.2.0",
-    "soundfont-player": "^0.12.0"
+    "soundfont-player": "^0.12.0",
+    "wavesurfer.js": "^7.12.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

@@ -8,6 +8,12 @@ type GuitarInstrument = any;
 let audioContext: AudioContext | null = null;
 let masterGain: GainNode | null = null;
 let guitarPromise: Promise<GuitarInstrument | null> | null = null;
+let _scheduleToken = 0;
+
+/** シーク時に呼び出す: 進行中の scheduleStrumPattern ループをキャンセル */
+export function invalidateScheduled(): void {
+    _scheduleToken++;
+}
 
 function ensureAudioContext(): AudioContext {
     if (!audioContext) {
@@ -144,6 +150,101 @@ export type PlayChordOptions = {
     whenSec?: number; // AudioContext absolute time
     strumSec?: number; // Stagger time per string (default 0.02)
 };
+
+export type StrokeDirection = 'down' | 'up';
+
+export interface StrokeEvent {
+    direction: StrokeDirection;
+    offsetSec: number; // 小節先頭からの相対時間
+    gain: number;      // アクセント係数
+}
+
+/**
+ * Build a strum pattern for a bar of the given duration.
+ * Returns DDUD pattern for standard bars, single down for short bars.
+ */
+function buildStrokeEvents(barDurationSec: number): StrokeEvent[] {
+    if (!Number.isFinite(barDurationSec) || barDurationSec < 0.5) {
+        return [{ direction: 'down', offsetSec: 0, gain: 1.0 }];
+    }
+
+    const base: Array<[StrokeDirection, number]> = [
+        ['down', 1.0],
+        ['down', 0.7],
+        ['up',   0.6],
+        ['down', 0.85],
+    ];
+
+    // 長いバー (> 3s) はパターンを2倍繰り返す
+    const pattern = barDurationSec > 3.0 ? [...base, ...base] : base;
+    const n = pattern.length;
+
+    return pattern.map(([direction, gain], i) => ({
+        direction,
+        gain,
+        offsetSec: (i / n) * barDurationSec,
+    }));
+}
+
+/**
+ * Play a single stroke (down or up) on the guitar.
+ * Down: all strings low→high. Up: top 3 strings (G,B,E) high→low, softer.
+ */
+export async function playStroke(
+    frets: Array<number | string | null | undefined>,
+    direction: StrokeDirection,
+    options?: PlayChordOptions
+): Promise<void> {
+    const guitar = await getGuitar();
+    if (!guitar || !audioContext) return;
+
+    if (audioContext.state === "suspended") {
+        try { await audioContext.resume(); } catch (_) {}
+    }
+
+    const baseWhen = typeof options?.whenSec === "number" ? options.whenSec : audioContext.currentTime;
+    const duration = options?.durationSec ?? 0.8;
+    const gain = options?.gain ?? 1.0;
+
+    if (direction === 'down') {
+        const notes = fretsToMidiNotes(frets);
+        notes.forEach((midi, idx) => {
+            guitar.play(midi, baseWhen + idx * 0.012, { duration, gain });
+        });
+    } else {
+        // アップ: 上3弦 (index 3,4,5 = G3,B3,E4) のみを高→低順
+        const upFrets = Array.from({ length: Math.max(frets.length, 6) }, (_, i) =>
+            i >= 3 ? (frets[i] ?? null) : null
+        );
+        const notes = fretsToMidiNotes(upFrets).reverse();
+        notes.forEach((midi, idx) => {
+            guitar.play(midi, baseWhen + idx * 0.010, { duration, gain: gain * 0.75 });
+        });
+    }
+}
+
+/**
+ * Schedule a full strum pattern for one bar.
+ * @param frets       Tab frets for the bar's chord
+ * @param barStartCtxSec  AudioContext absolute time of bar start
+ * @param barDurationSec  Duration of the bar in seconds
+ */
+export async function scheduleStrumPattern(
+    frets: Array<number | string | null | undefined>,
+    barStartCtxSec: number,
+    barDurationSec: number
+): Promise<void> {
+    const token = _scheduleToken;
+    const strokes = buildStrokeEvents(barDurationSec);
+    for (let i = 0; i < strokes.length; i++) {
+        if (_scheduleToken !== token) return;
+        const stroke = strokes[i];
+        const whenSec = barStartCtxSec + stroke.offsetSec;
+        const nextOffset = strokes[i + 1]?.offsetSec ?? barDurationSec;
+        const durationSec = Math.max(0.15, nextOffset - stroke.offsetSec);
+        await playStroke(frets, stroke.direction, { whenSec, durationSec, gain: stroke.gain });
+    }
+}
 
 /**
  * Play a chord from TAB frets using SoundFont.

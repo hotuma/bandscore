@@ -1,77 +1,461 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
 @import "tailwindcss";
 
+/* ============================================
+   BandScore Design System - Dark Premium Theme
+   ============================================ */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Background layers */
+  --bg-base:      #0a0b0f;
+  --bg-surface:   #12141a;
+  --bg-elevated:  #1a1d27;
+  --bg-overlay:   #222638;
+
+  /* Accent colors */
+  --accent:       #7c6ef5;
+  --accent-2:     #4ff7cf;
+  --accent-glow:  rgba(124, 110, 245, 0.35);
+  --accent-2-glow: rgba(79, 247, 207, 0.3);
+
+  /* Text */
+  --text-primary: #f0f2ff;
+  --text-secondary: #8890b0;
+  --text-muted:   #4a506a;
+
+  /* Borders */
+  --border:       rgba(255,255,255,0.07);
+  --border-bright: rgba(255,255,255,0.14);
+
+  /* Status */
+  --success:      #22c98a;
+  --warning:      #f5a623;
+  --error:        #f5564a;
+
+  /* Shadows */
+  --shadow-sm:  0 2px 8px rgba(0,0,0,0.4);
+  --shadow-md:  0 8px 24px rgba(0,0,0,0.5);
+  --shadow-lg:  0 20px 60px rgba(0,0,0,0.6);
+  --shadow-accent: 0 0 30px var(--accent-glow);
+
+  /* Legacy vars for non-workspace pages */
+  --background: #0a0b0f;
+  --foreground: #f0f2ff;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* ===== Guitar Tab Highlight Optimization ===== */
-/* Grid Item Highlight - Performance optimized with will-change */
-.bar-grid-item.bar-highlighted {
-  background-color: rgb(37, 99, 235);
-  border-color: rgb(37, 99, 235);
-  color: white;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-  transform: scale(1.1);
-  z-index: 10;
+/* ===== Scrollbar Styling ===== */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-surface); }
+::-webkit-scrollbar-thumb { background: var(--bg-overlay); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+/* ===== Glass Morphism Utilities ===== */
+.glass {
+  background: rgba(26, 29, 39, 0.75);
+  backdrop-filter: blur(16px) saturate(1.5);
+  -webkit-backdrop-filter: blur(16px) saturate(1.5);
+  border: 1px solid var(--border);
+}
+
+.glass-bright {
+  background: rgba(34, 38, 56, 0.85);
+  backdrop-filter: blur(20px) saturate(1.8);
+  -webkit-backdrop-filter: blur(20px) saturate(1.8);
+  border: 1px solid var(--border-bright);
+}
+
+/* ===== Gradient Utilities ===== */
+.gradient-accent {
+  background: linear-gradient(135deg, var(--accent) 0%, #5b8ef5 100%);
+}
+
+.gradient-accent-2 {
+  background: linear-gradient(135deg, var(--accent-2) 0%, #5b8ef5 100%);
+}
+
+.gradient-surface {
+  background: linear-gradient(180deg, var(--bg-surface) 0%, var(--bg-base) 100%);
+}
+
+.text-gradient {
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ===== Glow Effects ===== */
+.glow-accent { box-shadow: var(--shadow-accent); }
+.glow-sm { box-shadow: 0 0 12px var(--accent-glow); }
+
+/* ===== Animations ===== */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 8px var(--accent-glow); }
+  50%       { box-shadow: 0 0 24px var(--accent-glow), 0 0 48px var(--accent-glow); }
+}
+
+@keyframes tap-ripple {
+  0%   { transform: scale(1); opacity: 1; }
+  100% { transform: scale(2.5); opacity: 0; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes bar-flash {
+  0%   { box-shadow: 0 0 0 0 var(--accent-glow); }
+  50%  { box-shadow: 0 0 20px 4px var(--accent-glow); }
+  100% { box-shadow: 0 0 0 0 var(--accent-glow); }
+}
+
+.animate-fadeIn   { animation: fadeIn 0.3s ease forwards; }
+.animate-slideUp  { animation: slideUp 0.4s ease forwards; }
+.animate-pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
+.animate-spin     { animation: spin 1s linear infinite; }
+
+/* ===== WaveSurfer Styling ===== */
+.waveform-container {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+}
+
+.waveform-container wave {
+  border-radius: 12px;
+}
+
+/* ===== Bar Grid Highlight (Dark theme) ===== */
+.bar-grid-item {
+  transition: transform 0.1s ease, background-color 0.1s ease, border-color 0.1s ease;
   will-change: transform, background-color;
+  cursor: pointer;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
 }
 
-.bar-grid-item.bar-highlighted .bar-number {
-  color: rgb(219, 234, 254);
+.bar-grid-item:hover {
+  background: var(--bg-overlay);
+  border-color: var(--border-bright);
 }
 
-.bar-grid-item.bar-highlighted .bar-chord {
+.bar-grid-item.bar-highlighted {
+  background: linear-gradient(135deg, var(--accent) 0%, #5b8ef5 100%);
+  border-color: var(--accent);
   color: white;
+  transform: scale(1.07);
+  z-index: 10;
+  box-shadow: 0 0 20px var(--accent-glow);
+  animation: bar-flash 0.3s ease forwards;
 }
 
-/* Card Item Highlight - Performance optimized with will-change */
-.bar-card-item.bar-highlighted {
-  border-color: rgb(59, 130, 246);
-  box-shadow: 0 0 0 2px rgb(191, 219, 254), 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-  transform: scale(1.02);
+.bar-grid-item.bar-highlighted .bar-number { color: rgba(255,255,255,0.7); }
+.bar-grid-item.bar-highlighted .bar-chord  { color: white; font-weight: 800; }
+
+/* ===== Bar Card Highlight (Dark theme) ===== */
+.bar-card-item {
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
   will-change: transform, box-shadow;
 }
 
-.bar-card-item.bar-highlighted .bar-card-header {
-  background-color: rgb(239, 246, 255);
-  border-color: rgb(191, 219, 254);
+.bar-card-item.bar-highlighted {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow), var(--shadow-md);
+  transform: scale(1.02);
 }
 
-.bar-card-item.bar-highlighted .bar-card-bar-number {
-  color: rgb(37, 99, 235);
+.bar-card-item.bar-highlighted .bar-card-header  { background-color: rgba(124,110,245,0.15); border-color: rgba(124,110,245,0.3); }
+.bar-card-item.bar-highlighted .bar-card-bar-number { color: var(--accent); }
+.bar-card-item.bar-highlighted .bar-card-chord   { color: #a89cf7; }
+.bar-card-item.bar-highlighted .bar-card-content { background-color: rgba(124,110,245,0.05); }
+.bar-card-item.bar-highlighted .bar-card-tab     { background-color: var(--bg-surface); border-color: rgba(124,110,245,0.3); color: var(--text-primary); }
+
+/* ===== Tap Alignment Button ===== */
+.tap-btn {
+  position: relative;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
 }
 
-.bar-card-item.bar-highlighted .bar-card-chord {
-  color: rgb(29, 78, 216);
+.tap-btn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: rgba(79, 247, 207, 0.25);
+  opacity: 0;
+  animation: none;
 }
 
-.bar-card-item.bar-highlighted .bar-card-content {
-  background-color: rgba(239, 246, 255, 0.3);
+.tap-btn.tapping::after {
+  animation: tap-ripple 0.4s ease-out forwards;
 }
 
-.bar-card-item.bar-highlighted .bar-card-tab {
-  background-color: white;
-  border-color: rgb(191, 219, 254);
-  color: rgb(31, 41, 55);
+/* ===== Chord Candidate Palette ===== */
+.chord-palette {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-bright);
+  border-radius: 16px;
+  box-shadow: var(--shadow-lg);
+  animation: slideUp 0.2s ease forwards;
 }
+
+.chord-candidate-btn {
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: 'Inter', sans-serif;
+}
+
+.chord-candidate-btn:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+  transform: scale(1.05);
+  box-shadow: 0 0 12px var(--accent-glow);
+}
+
+.chord-candidate-btn.diatonic {
+  border-color: rgba(124,110,245,0.4);
+  color: #a89cf7;
+}
+
+.chord-candidate-btn.selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+  box-shadow: 0 0 12px var(--accent-glow);
+}
+
+/* ===== Workspace Layout ===== */
+.ws-panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+}
+
+.ws-stat-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem 1.5rem;
+  text-align: center;
+}
+
+.ws-stat-label {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.ws-stat-value {
+  font-size: 1.8rem;
+  font-weight: 900;
+  color: var(--text-primary);
+  line-height: 1;
+}
+
+/* ===== Export Panel ===== */
+.export-panel {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem;
+}
+
+.export-code {
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.8rem;
+  color: var(--accent-2);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 150px;
+  overflow-y: auto;
+  line-height: 1.6;
+}
+
+/* ===== Shimmer Loading ===== */
+.shimmer {
+  background: linear-gradient(90deg, var(--bg-elevated) 25%, var(--bg-overlay) 50%, var(--bg-elevated) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* ===== Control Bar ===== */
+.control-bar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1.25rem;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 16px 16px;
+}
+
+.ctrl-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 50%;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.ctrl-btn:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+  box-shadow: 0 0 12px var(--accent-glow);
+}
+
+.ctrl-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.ctrl-btn.play-btn {
+  width: 3rem;
+  height: 3rem;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+  box-shadow: 0 0 16px var(--accent-glow);
+}
+
+.ctrl-btn.play-btn:hover {
+  transform: scale(1.1);
+  box-shadow: 0 0 24px var(--accent-glow);
+}
+
+/* ===== Slider Styling ===== */
+.ws-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-overlay);
+  outline: none;
+  cursor: pointer;
+}
+
+.ws-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent-glow);
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.ws-slider::-webkit-slider-thumb:hover { transform: scale(1.3); }
+
+/* ===== Drop Zone ===== */
+.drop-zone {
+  border: 2px dashed var(--border-bright);
+  border-radius: 20px;
+  background: var(--bg-surface);
+  transition: all 0.25s ease;
+  cursor: pointer;
+}
+
+.drop-zone:hover, .drop-zone.drag-over {
+  border-color: var(--accent);
+  background: rgba(124,110,245,0.06);
+  box-shadow: 0 0 30px var(--accent-glow);
+}
+
+/* ===== Tooltip ===== */
+.ws-tooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-overlay);
+  border: 1px solid var(--border-bright);
+  border-radius: 8px;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 100;
+}
+
+/* ===== Tag / Badge ===== */
+.ws-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.ws-badge.accent { background: rgba(124,110,245,0.2); color: var(--accent); border: 1px solid rgba(124,110,245,0.3); }
+.ws-badge.success { background: rgba(34,201,138,0.15); color: var(--success); border: 1px solid rgba(34,201,138,0.25); }
+.ws-badge.warning { background: rgba(245,166,35,0.15); color: var(--warning); border: 1px solid rgba(245,166,35,0.25); }
+

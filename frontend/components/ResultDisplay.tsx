@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { AnalysisResult } from '../lib/api';
-import { playChordFromTabWithSoundFont, getAudioContextTime, initAudioContext, setGuitarSoundVolume, preloadGuitar } from '../lib/guitarSound';
+import { playChordFromTabWithSoundFont, scheduleStrumPattern, getAudioContextTime, initAudioContext, setGuitarSoundVolume, preloadGuitar } from '../lib/guitarSound';
 // import { analysisResultToTimedChords } from '../lib/chordTimeline'; // unused
 
 
@@ -23,20 +23,45 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
 
     // UX State
     const [offsetSec, setOffsetSec] = useState<number>(0);
+    // スケジューラーtick内のstale closureを防ぐためrefでも保持
+    const offsetSecRef = useRef<number>(0);
+    useEffect(() => { offsetSecRef.current = offsetSec; }, [offsetSec]);
     const [autoScroll, setAutoScroll] = useState<boolean>(true);
     const [autoChord, setAutoChord] = useState<boolean>(true);
     const [chordVolume, setChordVolumeState] = useState<number>(0.8);
     const [showDebug, setShowDebug] = useState<boolean>(false);
+
+    // BPM State
+    const [adjustedBpm, setAdjustedBpm] = useState<number>(result.bpm || 120);
+    const [showBpmSlider, setShowBpmSlider] = useState<boolean>(false);
+    const [metronomeActive, setMetronomeActive] = useState<boolean>(false);
+    const metronomeIntervalRef = useRef<number | null>(null);
+
+    // BPM調整用に調整されたバーを計算
+    const adjustedBars = useMemo(() => {
+        if (!result.bars || adjustedBpm === result.bpm) {
+            return result.bars || [];
+        }
+
+        const bpmRatio = result.bpm / adjustedBpm;
+        return result.bars.map((bar: any) => ({
+            ...bar,
+            start_sec: bar.start_sec * bpmRatio,
+            end_sec: bar.end_sec * bpmRatio
+        }));
+    }, [result.bars, adjustedBpm, result.bpm]);
 
     // Preload guitar soundfont on mount
     useEffect(() => {
         preloadGuitar();
     }, []);
 
-    // M4A直接配信により、librosaとブラウザが同一フォーマットをデコードするため
-    // 系統的なオフセット補償は不要。ユーザーは手動で微調整可能（±0.5sスライダー）
+    // http/https URL (バックエンド配信 = yt-dlp 経由) の場合は librosa と
+    // ブラウザのデコード差を補償するため +0.2s をデフォルトとして適用。
+    // blob: URL はローカルファイル直接再生のため補正不要。
     useEffect(() => {
-        setOffsetSec(0);
+        const isRemoteAudio = audioUrl?.startsWith('http://') || audioUrl?.startsWith('https://');
+        setOffsetSec(isRemoteAudio ? 0.2 : 0);
     }, [audioUrl]);
 
     // Track actual audio duration for accurate sync
@@ -115,7 +140,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
 
     // Safe bars access (renamed to safeBars to ensure no confusion/stale usage)
     const rawSafeBars = useMemo(() => {
-        const bars = result?.bars ?? [];
+        const bars = adjustedBars;
         return bars.map((b: any, i: number) => {
             const rawStart = b.start_sec;
             const rawEnd = b.end_sec;
@@ -171,6 +196,79 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
         }));
     }, [rawSafeBars, audioDurationSec, result?.duration_sec]);
 
+    // --- Metronome Functions ---
+    const toggleMetronome = () => {
+        if (metronomeActive) {
+            stopMetronome();
+        } else {
+            startMetronome();
+        }
+    };
+
+    const startMetronome = () => {
+        if (metronomeIntervalRef.current !== null) {
+            clearInterval(metronomeIntervalRef.current);
+        }
+
+        const beatInterval = 60.0 / adjustedBpm;
+        let beatCount = 0;
+
+        const playClick = () => {
+            const audioContext = getAudioContextTime();
+            if (!audioContext) return;
+
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+
+            // First beat of measure is higher pitch
+            if (beatCount % 4 === 0) {
+                oscillator.frequency.value = 1000; // High pitch for downbeat
+                gainNode.gain.value = 0.3;
+            } else {
+                oscillator.frequency.value = 800; // Lower pitch for other beats
+                gainNode.gain.value = 0.2;
+            }
+
+            oscillator.start(audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.05);
+            oscillator.stop(audioContext.currentTime + 0.05);
+
+            beatCount++;
+        };
+
+        playClick(); // Immediate first click
+        metronomeIntervalRef.current = window.setInterval(playClick, beatInterval * 1000);
+        setMetronomeActive(true);
+    };
+
+    const stopMetronome = () => {
+        if (metronomeIntervalRef.current !== null) {
+            clearInterval(metronomeIntervalRef.current);
+            metronomeIntervalRef.current = null;
+        }
+        setMetronomeActive(false);
+    };
+
+    // Stop metronome when BPM changes
+    useEffect(() => {
+        if (metronomeActive) {
+            stopMetronome();
+            startMetronome();
+        }
+    }, [adjustedBpm]);
+
+    // Clean up metronome on unmount
+    useEffect(() => {
+        return () => {
+            if (metronomeIntervalRef.current !== null) {
+                clearInterval(metronomeIntervalRef.current);
+            }
+        };
+    }, []);
+
     // --- Diagnostic: バーのタイミング情報をコンソールに出力 ---
     useEffect(() => {
         if (safeBars.length > 0) {
@@ -191,10 +289,33 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
 
     // --- Precise Bar Timing Utilities ---
     // Efficiently find current bar using binary search on start_sec/end_sec
-    const findBarIndexByTime = (t: number, bars: any[]): number => {
+    const findBarIndexByTime = (t: number, bars: any[], beatTimes?: number[]): number => {
         if (!bars || bars.length === 0) return -1;
         if (!Number.isFinite(t)) return -1;
 
+        // beat_times が存在する場合、バー期間と最初のバーからバーインデックスを計算
+        if (beatTimes && beatTimes.length > 0 && bars.length >= 2) {
+            const firstBarStart = Number(bars[0]?.start_sec);
+            const secondBarStart = Number(bars[1]?.start_sec);
+
+            // バー期間の推定（最初の2バーの間隔）
+            const barDuration = secondBarStart - firstBarStart;
+
+            if (Number.isFinite(firstBarStart) && Number.isFinite(barDuration) && barDuration > 0) {
+                // time が最初のバーの前の場合
+                if (t < firstBarStart) return 0;
+
+                // time が最後のバー以降の場合
+                const lastBarEnd = Number(bars[bars.length - 1]?.end_sec);
+                if (Number.isFinite(lastBarEnd) && t >= lastBarEnd) return bars.length - 1;
+
+                // バーインデックスを計算: (time - firstBarStart) / barDuration
+                const barIndex = Math.floor((t - firstBarStart) / barDuration);
+                return Math.max(0, Math.min(bars.length - 1, barIndex));
+            }
+        }
+
+        // フォールバック: 既存ロジック（bars 配列をバイナリ探索）
         // 壊れた bar があると二分探索が壊れるので、まず端の健全性を確認
         const firstS = Number(bars[0]?.start_sec);
         const lastE = Number(bars[bars.length - 1]?.end_sec);
@@ -263,7 +384,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
             if (audio) {
                 const t = audio.currentTime - offsetSec; // Use Analysis Time
                 // Reuse findBarIndex logic
-                const current = findBarIndexByTime(t, safeBars);
+                const current = findBarIndexByTime(t, safeBars, result?.beat_times);
                 schedulingBarRef.current = Math.min(safeBars.length - 1, Math.max(0, current));
                 scheduledUpToRef.current = schedulingBarRef.current - 1; // Mark previous as done
                 console.log("[Play] Scheduler initialized at bar index:", schedulingBarRef.current);
@@ -286,7 +407,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
             resetAnchor();
 
             const t = audio.currentTime - offsetSec; // Use Analysis Time
-            const current = findBarIndexByTime(t, safeBars);
+            const current = findBarIndexByTime(t, safeBars, result?.beat_times);
             schedulingBarRef.current = Math.min(safeBars.length - 1, Math.max(0, current));
             scheduledUpToRef.current = schedulingBarRef.current - 1;
 
@@ -523,7 +644,8 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                 tBrowser = audioRealTime;
             }
             // Convert to Analysis Time for scheduling checks
-            const tAnalysis = tBrowser - offsetSec;
+            // offsetSecRef.current を使用してstale closureを回避
+            const tAnalysis = tBrowser - offsetSecRef.current;
 
             // Re-sync scheduling pointer if it fell behind too much (e.g. big lag spike)
             if (schedulingBarRef.current < 0 || schedulingBarRef.current >= safeBars.length) {
@@ -572,14 +694,8 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
 
                 const frets = bar?.tab?.frets;
                 if (frets) {
-                    const sustainSec = Math.min(1.8, Math.max(0.25, (barEndAudio - barStartAudio) * 0.95));
-                    playChordFromTabWithSoundFont(frets, {
-                        durationSec: sustainSec,
-                        whenSec,
-                        strumSec: 0.012, // Reduced for tighter synchronization
-                    }).then(() => {
-                        // Success
-                    }).catch(console.error);
+                    const barDuration = barEndAudio - barStartAudio;
+                    scheduleStrumPattern(frets, whenSec, barDuration).catch(console.error);
                 }
 
                 scheduledUpToRef.current = barIndex; // MARK DONE
@@ -758,6 +874,95 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                             />
                             <span className="text-xs text-gray-400">Debug</span>
                         </label>
+
+                        <div className="w-px h-4 bg-gray-300 hidden sm:block"></div>
+
+                        {/* Metronome Toggle */}
+                        <button
+                            onClick={toggleMetronome}
+                            className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors ${
+                                metronomeActive
+                                    ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                            }`}
+                            title="Toggle metronome"
+                        >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                {metronomeActive ? (
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                ) : (
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                )}
+                            </svg>
+                            <span>Metronome</span>
+                        </button>
+
+                        <div className="w-px h-4 bg-gray-300 hidden sm:block"></div>
+
+                        {/* BPM Adjustment */}
+                        <div className="flex flex-col gap-2">
+                            <div className="flex items-center gap-2">
+                                <span className="font-medium">BPM:</span>
+                                <button
+                                    onClick={() => setAdjustedBpm(prev => Math.max(60, prev - 1))}
+                                    className="w-6 h-6 flex items-center justify-center bg-white border border-gray-300 rounded hover:bg-gray-50 font-mono text-sm"
+                                >-</button>
+                                <span className="font-mono w-10 text-center text-sm">{adjustedBpm}</span>
+                                <button
+                                    onClick={() => setAdjustedBpm(prev => Math.min(240, prev + 1))}
+                                    className="w-6 h-6 flex items-center justify-center bg-white border border-gray-300 rounded hover:bg-gray-50 font-mono text-sm"
+                                >+</button>
+                                <span className="text-xs text-gray-400 ml-1">({result.bpm}→{adjustedBpm})</span>
+                                <button
+                                    onClick={() => setShowBpmSlider(!showBpmSlider)}
+                                    className="text-xs text-blue-600 hover:text-blue-700 ml-1"
+                                >
+                                    {showBpmSlider ? '▲' : '▼'}
+                                </button>
+                            </div>
+
+                            {/* Quick Adjust Buttons */}
+                            {showBpmSlider && (
+                                <div className="flex items-center gap-1 flex-wrap">
+                                    <button
+                                        onClick={() => setAdjustedBpm(prev => Math.max(60, Math.round(prev / 2)))}
+                                        className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded"
+                                        title="Half speed (÷2)"
+                                    >÷2</button>
+                                    <button
+                                        onClick={() => setAdjustedBpm(prev => Math.max(60, Math.round(prev / 1.5)))}
+                                        className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded"
+                                        title="Two-thirds speed (÷1.5)"
+                                    >÷1.5</button>
+                                    <button
+                                        onClick={() => setAdjustedBpm(result.bpm)}
+                                        className="px-2 py-1 text-xs bg-blue-100 hover:bg-blue-200 rounded text-blue-700"
+                                        title="Reset to original"
+                                    >Reset</button>
+                                    <button
+                                        onClick={() => setAdjustedBpm(prev => Math.min(240, Math.round(prev * 1.5)))}
+                                        className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded"
+                                        title="1.5x speed (×1.5)"
+                                    >×1.5</button>
+                                    <button
+                                        onClick={() => setAdjustedBpm(prev => Math.min(240, Math.round(prev * 2)))}
+                                        className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded"
+                                        title="Double speed (×2)"
+                                    >×2</button>
+                                    {/* BPM Slider */}
+                                    <input
+                                        type="range"
+                                        min={60}
+                                        max={240}
+                                        step={1}
+                                        value={adjustedBpm}
+                                        onChange={(e) => setAdjustedBpm(Number(e.target.value))}
+                                        className="w-24 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                                        title="Adjust BPM"
+                                    />
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
             )}
@@ -765,8 +970,13 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
             {/* Header Stats */}
             <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex justify-around items-center">
                 <div className="text-center">
-                    <div className="text-xs text-gray-400 uppercase tracking-wider font-semibold mb-1">BPM</div>
-                    <div className="text-3xl font-black text-gray-800">{result.bpm}</div>
+                    <div className="text-xs text-gray-400 uppercase tracking-wider font-semibold mb-1">
+                        BPM {adjustedBpm !== result.bpm && <span className="text-blue-600">(Adjusted)</span>}
+                    </div>
+                    <div className="text-3xl font-black text-gray-800">
+                        {adjustedBpm}
+                        {adjustedBpm !== result.bpm && <span className="text-sm text-gray-400 ml-2">({result.bpm})</span>}
+                    </div>
                 </div>
                 <div className="w-px h-12 bg-gray-100"></div>
                 <div className="text-center">
