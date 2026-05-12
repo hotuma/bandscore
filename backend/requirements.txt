@@ -8,4 +8,4 @@ scipy==1.11.4
 soundfile
 yt-dlp
 psutil
-madmom==0.16.1
+BeatNet==1.0.2

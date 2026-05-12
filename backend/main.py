@@ -1420,13 +1420,13 @@ def evaluate_tempo_prior(bpm: float) -> float:
         スコア（0.0-1.0）
     """
     if 60 <= bpm <= 100:
-        return 0.7  # バラード/ブルース/R&B（0.7に調整）
+        return 0.7  # バラード/ブルース/R&B
     elif 100 < bpm <= 140:
-        return 0.7  # ポップ/ロック（0.7に調整）
+        return 0.8  # ポップ/ロック（中速を強調）
     elif 140 < bpm <= 180:
-        return 0.6  # アップテンポロック/EDM（維持）
+        return 0.5  # アップテンポロック/EDM（抑制）
     elif 180 < bpm <= 240:
-        return 0.5  # 高速ロック/パンク（0.5に上げる）
+        return 0.4  # 高速ロック/パンク（抑制）
     elif 40 <= bpm < 60:
         return 0.5  # バラード（遅め、維持）
     else:
@@ -1529,7 +1529,7 @@ def verify_tempo_octave(y: np.ndarray, sr: int, detected_bpm: float, onset_env: 
     位相エネルギー集中度をゲート条件として使用:
     候補に明確な拍構造がある場合のみ補正を許可。
     """
-    if detected_bpm < 80 or detected_bpm > 240:
+    if detected_bpm < 60 or detected_bpm > 240:
         print(f"[OctaveVerify] BPM {detected_bpm:.1f} outside correction range, keeping as-is")
         return detected_bpm, 1.0
 
@@ -2022,13 +2022,26 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
         else:
             app_logger.debug("Detecting BPM...")
 
-            # === バス帯域BPM検出（一時的に無効化） ===
-            # 注: バス帯域BPM検出はオクターブ誤検出の問題があるため、一時的に無効化
-            # 将来的に改良されたアルゴリズムで再実装予定
-            app_logger.debug("Skipping bass-focused BPM detection (disabled due to octave issues)")
+            # === librosa.beat_trackによるBPM検出（優先） ===
+            # librosa.beat_trackは堅牢で、多くの場合で正確なBPMを検出
+            app_logger.debug("librosa.beat_track BPM detection...")
+            try:
+                librosa_tempo, librosa_beats = librosa.beat.beat_track(y=y, sr=sr)
+                app_logger.info(f"[librosa.beat_track] Detected BPM: {librosa_tempo:.2f}, Beats: {len(librosa_beats)}")
 
-            # === 全帯域BPM検出（従来） ===
-            app_logger.debug("Full-band BPM detection...")
+                # librosa.beat_trackの結果を初期BPMとして使用
+                bpm = librosa_tempo
+                app_logger.info(f"[BPM Detection] Using librosa.beat_track result as initial BPM: {bpm:.2f}")
+
+                # librosa.beat_trackで十分な信頼性がある場合、他の検出をスキップ
+                # ただし、オクターブ補正やバス帯域チェックは適用
+            except Exception as e:
+                app_logger.warning(f"[librosa.beat_track] Failed: {e}, falling back to full-band detection")
+                bpm = None
+
+            # === 全帯域BPM検出（フォールバック） ===
+            if bpm is None:
+                app_logger.debug("Full-band BPM detection (fallback)...")
 
             # BPM 60-240を1刻みでスキャンし、F1スコアが最大のBPMを選択
             best_bpm = 120.0
@@ -2152,7 +2165,7 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
             # Stage 2.7: バス自己相関によるテンポ補正
             # 全帯域オンセットはハイハット等で高速テンポを検出しやすい。
             # バスドラム (20-200Hz) の自己相関ピークが真のテンポを示す場合がある。
-            if bpm is not None and bpm > 200:
+            if bpm is not None and bpm > 140:
                 y_bass_temp = lowpass_filter(y, sr, cutoff_hz=200)
                 y_bass_temp = highpass_filter(y_bass_temp, sr, cutoff_hz=20)
                 bass_env_temp = librosa.onset.onset_strength(
@@ -2204,10 +2217,33 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
                         TOLERANCE = 0.05  # 厳格化: 0.75（半テンポ）を拒絶
                         is_valid_ratio = any(abs(ratio - r) < TOLERANCE for r in VALID_RATIOS)
                         if is_valid_ratio:
-                            print(f"[BassTempoCorrection] {bpm:.1f} → {best_bass_bpm:.0f} BPM "
-                                  f"(ratio={ratio:.3f}, valid ratio = {r:.3f})")
-                            bpm = best_bass_bpm
-                            octave_factor = 1.0
+                            # 60-80 BPMの範囲内の場合、2倍のBPMも候補として考慮
+                            # バスドラムが2拍ごとに強く現れている場合、実際のBPMは2倍の可能性がある
+                            if 60 <= best_bass_bpm <= 80:
+                                doubled_bpm = best_bass_bpm * 2
+                                if 100 <= doubled_bpm <= 140:
+                                    doubled_prior = evaluate_tempo_prior(doubled_bpm)
+                                    best_bass_prior = evaluate_tempo_prior(best_bass_bpm)
+                                    if doubled_prior > best_bass_prior:
+                                        print(f"[BassTempoCorrection] {bpm:.1f} → {doubled_bpm:.0f} BPM "
+                                              f"(bass={best_bass_bpm:.0f} × 2, 2x has higher prior)")
+                                        bpm = doubled_bpm
+                                        octave_factor = 1.0
+                                    else:
+                                        print(f"[BassTempoCorrection] {bpm:.1f} → {best_bass_bpm:.0f} BPM "
+                                              f"(ratio={ratio:.3f}, valid ratio = {r:.3f})")
+                                        bpm = best_bass_bpm
+                                        octave_factor = 1.0
+                                else:
+                                    print(f"[BassTempoCorrection] {bpm:.1f} → {best_bass_bpm:.0f} BPM "
+                                          f"(ratio={ratio:.3f}, valid ratio = {r:.3f})")
+                                    bpm = best_bass_bpm
+                                    octave_factor = 1.0
+                            else:
+                                print(f"[BassTempoCorrection] {bpm:.1f} → {best_bass_bpm:.0f} BPM "
+                                      f"(ratio={ratio:.3f}, valid ratio = {r:.3f})")
+                                bpm = best_bass_bpm
+                                octave_factor = 1.0
                         else:
                             candidate_3_2 = best_bass_bpm * 1.5
                             if abs(candidate_3_2 - bpm) / bpm < 0.05:  # 3/2 補正を厳格化
@@ -2262,6 +2298,28 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
                 else:
                     print(f"[BassTempoCheck] Bass peak {best_bass_bpm:.0f} BPM "
                           f"close to detected {bpm:.1f}, no correction needed")
+
+        # Stage 2.8: BeatNetによるBPM検出（高精度）
+        # BeatNetはロック/ポップス音楽に特化しており、高い精度を誇る
+        if forced_bpm is None:
+            app_logger.info("[BeatNet] Attempting BeatNet BPM detection...")
+            beatnet_result = detect_bpm_with_beatnet(y, sr)
+            if beatnet_result is not None:
+                beatnet_bpm, beatnet_confidence = beatnet_result
+                # BeatNetの結果が妥当な範囲（60-200 BPM）か確認
+                if 60 <= beatnet_bpm <= 200:
+                    # 既存のBPMと比較し、大きく異なる場合は慎重に判断
+                    ratio = beatnet_bpm / bpm if bpm > 0 else 1.0
+                    # 比率が1.2倍以内、または既存のBPMが極端な値の場合はBeatNetを採用
+                    if 0.83 <= ratio <= 1.2 or bpm < 80 or bpm > 180:
+                        app_logger.info(f"[BeatNet] Using BeatNet result: {beatnet_bpm:.2f} BPM (replaces {bpm:.1f} BPM)")
+                        bpm = beatnet_bpm
+                    else:
+                        app_logger.info(f"[BeatNet] BeatNet result {beatnet_bpm:.2f} BPM differs from current {bpm:.1f} BPM (ratio={ratio:.2f}x), keeping current BPM")
+                else:
+                    app_logger.warning(f"[BeatNet] BeatNet result out of range: {beatnet_bpm:.2f} BPM")
+            else:
+                app_logger.info("[BeatNet] BeatNet detection failed, using current BPM")
 
         # Stage 3: ビート位相検出 - 最適なグリッド開始位置を探索
         if forced_phase is not None:
@@ -2356,70 +2414,79 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
 
         # --- ハイブリッド BPM 検出の統合 ---
         # 既存の BPM 検出結果とハイブリッド方法を比較し、より良い結果を採用
-        app_logger.debug("Integrating hybrid BPM detection...")
-        try:
-            # 元のBPMを中心に±40 BPMの範囲でハイブリッド検出を実行
-            # これにより、1.5倍速の誤検出（例: 105 BPM → 156 BPM）を防止
-            bpm_search_min = max(60, int(bpm - 40))
-            bpm_search_max = min(240, int(bpm + 40))
-            app_logger.info(f"[Hybrid BPM] Searching BPM range: {bpm_search_min}-{bpm_search_max} (around original {bpm:.1f} BPM)")
+        # ただし、forced_bpm が渡されている場合はスキップ（2番目以降のチャンクでBPMを統一するため）
+        if forced_bpm is None:
+            app_logger.debug("Integrating hybrid BPM detection...")
+            try:
+                # 元のBPMを中心に±40 BPMの範囲でハイブリッド検出を実行
+                # これにより、1.5倍速の誤検出（例: 105 BPM → 156 BPM）を防止
+                bpm_search_min = max(60, int(bpm - 40))
+                bpm_search_max = min(240, int(bpm + 40))
+                app_logger.info(f"[Hybrid BPM] Searching BPM range: {bpm_search_min}-{bpm_search_max} (around original {bpm:.1f} BPM)")
 
-            hybrid_bpm, dl_confidence = detect_bpm_with_deep_learning(y, sr, bpm_range=(bpm_search_min, bpm_search_max))
-            app_logger.info(f"[Hybrid BPM] DL result: {hybrid_bpm:.1f} BPM (confidence: {dl_confidence:.3f})")
+                hybrid_bpm, dl_confidence = detect_bpm_with_deep_learning(y, sr, bpm_range=(bpm_search_min, bpm_search_max))
+                app_logger.info(f"[Hybrid BPM] DL result: {hybrid_bpm:.1f} BPM (confidence: {dl_confidence:.3f})")
 
-            # ディープラーニングの信頼度が高い（>0.9）場合は、その結果を優先して採用
-            # これは、全帯域オンセットが細かいリズムを誤検出する場合（例: 105 BPM → 78 BPM）に有効
-            if dl_confidence > 0.9:
-                ratio = hybrid_bpm / bpm
-                app_logger.info(f"[Hybrid BPM] High confidence DL result ({dl_confidence:.3f}): {hybrid_bpm:.1f} BPM (vs original {bpm:.1f} BPM, ratio={ratio:.2f}x) -> USING DL RESULT")
-                bpm = hybrid_bpm
-            else:
-                # 信頼度が低い場合、既存のロジックを使用
-                app_logger.info(f"[Hybrid BPM] DL confidence too low ({dl_confidence:.3f}), using original logic")
-
-                # オクターブ誤検出チェック: ハイブリッド結果が元のBPMの1.4-1.6倍の場合、
-                # 本来のBPMは半速（÷1.5）の可能性が高い
-                ratio = hybrid_bpm / bpm
-                if 1.4 <= ratio <= 1.6:
-                    half_speed = bpm / 1.5  # 本来のBPM候補
-                    if 60 <= half_speed <= 200:
-                        app_logger.info(f"[Hybrid BPM] Detected potential 1.5x speed error: {bpm:.1f} -> {hybrid_bpm:.1f} BPM")
-                        app_logger.info(f"[Hybrid BPM] Original BPM {bpm:.1f} is likely 1.5x faster than actual {half_speed:.1f} BPM")
-                        app_logger.info(f"[Hybrid BPM] Keeping original {bpm:.1f} BPM for octace verification")
-
-                # 既存の BPM が範囲外（<60 or >240）の場合、ハイブリッド結果を採用
-                # 範囲内の場合、元のBPMを優先（中速バイアスを削除）
-                if bpm < 60 or bpm > 240:
-                    app_logger.info(f"[Hybrid BPM] Using hybrid result: {hybrid_bpm:.1f} BPM (original {bpm:.1f} BPM out of valid range)")
-                    bpm = hybrid_bpm
-                else:
-                    # 元のBPMが有効範囲内の場合、ハイブリッド結果を参考にするが元のBPMを優先
-                    # ハイブリッド結果が元のBPMの±10%以内の場合のみ採用を検討
+                # ディープラーニングの信頼度が高い（>0.9）場合でも、元のBPMと大きく異なる場合は慎重に判断
+                # バス帯域チェック等で修正されたBPM（中速）を尊重するため、ratioが1.3以上または0.77以下の場合は元のBPMを維持
+                if dl_confidence > 0.9:
                     ratio = hybrid_bpm / bpm
-                    if 0.9 <= ratio <= 1.1:
-                        # 両方が近い場合、より中速（120-180）に近い方を採用
-                        ideal_bpm = 150.0
-                        hybrid_distance = abs(hybrid_bpm - ideal_bpm)
-                        original_distance = abs(bpm - ideal_bpm)
-
-                        if hybrid_distance < original_distance * 0.95:  # より厳しい条件
-                            app_logger.info(f"[Hybrid BPM] Using hybrid result: {hybrid_bpm:.1f} BPM (closer to ideal {ideal_bpm} BPM)")
-                            bpm = hybrid_bpm
-                        else:
-                            app_logger.info(f"[Hybrid BPM] Keeping original: {bpm:.1f} BPM (already optimal)")
+                    # 元のBPMと大きく異なる場合、元のBPM（バス帯域チェック等で修正されたもの）を優先
+                    if ratio >= 1.3 or ratio <= 0.77:
+                        app_logger.info(f"[Hybrid BPM] High confidence DL result ({dl_confidence:.3f}): {hybrid_bpm:.1f} BPM (vs original {bpm:.1f} BPM, ratio={ratio:.2f}x)")
+                        app_logger.info(f"[Hybrid BPM] Large difference detected, keeping original {bpm:.1f} BPM (likely corrected by bass/tempo check)")
                     else:
-                        # 差が大きい場合、元のBPMを維持
-                        app_logger.info(f"[Hybrid BPM] Keeping original: {bpm:.1f} BPM (hybrid {hybrid_bpm:.1f} BPM differs by {ratio:.2f}x)")
+                        app_logger.info(f"[Hybrid BPM] High confidence DL result ({dl_confidence:.3f}): {hybrid_bpm:.1f} BPM (vs original {bpm:.1f} BPM, ratio={ratio:.2f}x) -> USING DL RESULT")
+                        bpm = hybrid_bpm
+                else:
+                    # 信頼度が低い場合、既存のロジックを使用
+                    app_logger.info(f"[Hybrid BPM] DL confidence too low ({dl_confidence:.3f}), using original logic")
 
-            # BPM が更新された場合、beat_duration を再計算
-            beat_duration = 60.0 / bpm
-            target_segment_duration = beat_duration * 2
+                    # オクターブ誤検出チェック: ハイブリッド結果が元のBPMの1.4-1.6倍の場合、
+                    # 本来のBPMは半速（÷1.5）の可能性が高い
+                    ratio = hybrid_bpm / bpm
+                    if 1.4 <= ratio <= 1.6:
+                        half_speed = bpm / 1.5  # 本来のBPM候補
+                        if 60 <= half_speed <= 200:
+                            app_logger.info(f"[Hybrid BPM] Detected potential 1.5x speed error: {bpm:.1f} -> {hybrid_bpm:.1f} BPM")
+                            app_logger.info(f"[Hybrid BPM] Original BPM {bpm:.1f} is likely 1.5x faster than actual {half_speed:.1f} BPM")
+                            app_logger.info(f"[Hybrid BPM] Keeping original {bpm:.1f} BPM for octace verification")
 
-        except Exception as e:
-            app_logger.error(f"[Hybrid BPM] Error in hybrid detection: {e}, using original {bpm:.1f} BPM")
-            import traceback
-            traceback.print_exc()
-            # ハイブリッド方法が失敗した場合、既存の結果を使用
+                    # 既存の BPM が範囲外（<60 or >240）の場合、ハイブリッド結果を採用
+                    # 範囲内の場合、元のBPMを優先（中速バイアスを削除）
+                    if bpm < 60 or bpm > 240:
+                        app_logger.info(f"[Hybrid BPM] Using hybrid result: {hybrid_bpm:.1f} BPM (original {bpm:.1f} BPM out of valid range)")
+                        bpm = hybrid_bpm
+                    else:
+                        # 元のBPMが有効範囲内の場合、ハイブリッド結果を参考にするが元のBPMを優先
+                        # ハイブリッド結果が元のBPMの±10%以内の場合のみ採用を検討
+                        ratio = hybrid_bpm / bpm
+                        if 0.9 <= ratio <= 1.1:
+                            # 両方が近い場合、より中速（120-180）に近い方を採用
+                            ideal_bpm = 150.0
+                            hybrid_distance = abs(hybrid_bpm - ideal_bpm)
+                            original_distance = abs(bpm - ideal_bpm)
+
+                            if hybrid_distance < original_distance * 0.95:  # より厳しい条件
+                                app_logger.info(f"[Hybrid BPM] Using hybrid result: {hybrid_bpm:.1f} BPM (closer to ideal {ideal_bpm} BPM)")
+                                bpm = hybrid_bpm
+                            else:
+                                app_logger.info(f"[Hybrid BPM] Keeping original: {bpm:.1f} BPM (already optimal)")
+                        else:
+                            # 差が大きい場合、元のBPMを維持
+                            app_logger.info(f"[Hybrid BPM] Keeping original: {bpm:.1f} BPM (hybrid {hybrid_bpm:.1f} BPM differs by {ratio:.2f}x)")
+
+                # BPM が更新された場合、beat_duration を再計算
+                beat_duration = 60.0 / bpm
+                target_segment_duration = beat_duration * 2
+
+            except Exception as e:
+                app_logger.error(f"[Hybrid BPM] Error in hybrid detection: {e}, using original {bpm:.1f} BPM")
+                import traceback
+                traceback.print_exc()
+                # ハイブリッド方法が失敗した場合、既存の結果を使用
+        else:
+            app_logger.info(f"[Hybrid BPM] Skipping hybrid detection - using forced BPM: {bpm:.1f}")
 
         # --- ハイブリッド BPM 検出ここまで ---
         total_duration = librosa.frames_to_time(chroma.shape[1], sr=sr, hop_length=hop_length)
@@ -3164,7 +3231,7 @@ async def _process_analyze_url(url: str, mode: AnalyzeMode, cookies: UploadFile 
 # ハイブリッド BPM 検出機能
 # ============================================================================
 
-def evaluate_tempo_prior_hybrid(bpm: float, target_range: tuple = (140, 170)) -> float:
+def evaluate_tempo_prior_hybrid(bpm: float, target_range: tuple = (110, 150)) -> float:
     """
     テンポ事前確率評価（ハイブリッド用）
 
@@ -3512,6 +3579,64 @@ def detect_bpm_with_deep_learning(y: np.ndarray, sr: int, bpm_range: tuple[int, 
         return fallback_bpm, 0.0
 
 # ============================================================================
-# ディープラーニングBPM検出モデルの統合ここまで
+# BeatNet BPM検出
 # ============================================================================
+
+def detect_bpm_with_beatnet(y: np.ndarray, sr: int) -> tuple[float, float] | None:
+    """
+    BeatNet APIを使用したBPM検出
+
+    Args:
+        y: 音声信号
+        sr: サンプリングレート
+
+    Returns:
+        (検出されたBPM, 信頼度) または失敗時はNone
+    """
+    import os
+    import requests
+    import io
+    import soundfile as sf
+
+    # BeatNet URLの取得（環境変数またはデフォルト）
+    beatnet_url = os.environ.get("BEATNET_URL", "http://localhost:8001")
+
+    try:
+        # 音声をWAVバイト列に変換
+        buffer = io.BytesIO()
+        sf.write(buffer, y.T if y.ndim > 1 else y, sr, format='WAV')
+        buffer.seek(0)
+
+        # BeatNet APIを呼び出す
+        response = requests.post(
+            f"{beatnet_url}/detect_bpm",
+            files={"audio_file": ("audio.wav", buffer, "audio/wav")},
+            timeout=30
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            bpm = data.get("bpm")
+            if bpm is not None:
+                app_logger.info(f"[BeatNet] Detected BPM: {bpm:.2f} (beats={data.get('beats_count', 0)})")
+                # BeatNetは高精度なので信頼度は1.0
+                return float(bpm), 1.0
+            else:
+                app_logger.warning("[BeatNet] No BPM in response")
+                return None
+        else:
+            app_logger.warning(f"[BeatNet] API error: {response.status_code} - {response.text}")
+            return None
+
+    except requests.exceptions.RequestException as e:
+        app_logger.warning(f"[BeatNet] Connection failed: {e}")
+        return None
+    except Exception as e:
+        app_logger.error(f"[BeatNet] Detection failed: {e}", exc_info=True)
+        return None
+
+# ============================================================================
+# BeatNet BPM検出ここまで
+# ============================================================================
+
 
