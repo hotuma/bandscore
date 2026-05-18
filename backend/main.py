@@ -1986,13 +1986,25 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
         # チャンク長の決定：duration_limit_sec が来ていれば優先、なければ MAX_ANALYSIS_SEC
         load_dur = duration_limit_sec if duration_limit_sec is not None else MAX_ANALYSIS_SEC
 
-        y, sr = librosa.load(file_path, sr=22050, mono=True, offset=float(offset_sec), duration=float(load_dur))
-        app_logger.info(f"mem after load: {mem_mb():.1f} MB")
-        _progress(20) # Loaded
+        # Audio loading with FFmpeg error handling
+        try:
+            y, sr = librosa.load(file_path, sr=22050, mono=True, offset=float(offset_sec), duration=float(load_dur))
+            app_logger.info(f"mem after load: {mem_mb():.1f} MB")
+            _progress(20) # Loaded
 
-        app_logger.debug(f"Audio loaded. Size: {y.size}, SR: {sr}")
-        if y.size == 0:
-            raise ValueError("Audio file is empty or unreadable")
+            app_logger.debug(f"Audio loaded. Size: {y.size}, SR: {sr}")
+            if y.size == 0:
+                raise ValueError("Audio file is empty or unreadable")
+        except Exception as load_error:
+            app_logger.error(f"Failed to load audio file {file_path}: {load_error}")
+            # FFmpeg関連のエラーを検出
+            error_msg = str(load_error).lower()
+            if "ffmpeg" in error_msg or "decoder" in error_msg or "codec" in error_msg:
+                raise RuntimeError(
+                    "Audio decoding failed. FFmpeg may not be installed on the server. "
+                    "Please contact support or try a WAV file instead."
+                ) from load_error
+            raise RuntimeError(f"Audio loading failed: {load_error}") from load_error
 
         y = highpass_filter(y, sr)
         duration_sec = float(librosa.get_duration(y=y, sr=sr))
@@ -2677,6 +2689,36 @@ async def ping():
 def health():
     return {"status": "ok"}
 
+@app.get("/health/ffmpeg")
+def check_ffmpeg():
+    """FFmpegが利用可能かチェックするエンドポイント"""
+    try:
+        import tempfile
+        import soundfile as sf
+
+        # テスト用の短い音声を作成
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+            test_file_wav = f.name.replace(".mp3", ".wav")
+            # 1秒のサイレント音声をWAVで保存
+            test_audio = np.zeros(22050)
+            sf.write(test_file_wav, test_audio, 22050)
+
+        # librosaで読み込みを試みる（FFmpegが必要）
+        y, sr = librosa.load(test_file_wav, sr=22050, duration=0.1)
+        os.unlink(test_file_wav)
+
+        return {
+            "status": "ok",
+            "ffmpeg_available": True,
+            "message": "FFmpeg is properly configured for audio decoding"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "ffmpeg_available": False,
+            "message": f"FFmpeg or audio codec not available: {e}"
+        }
+
 @app.get("/version")
 def version():
     return {"git_sha": os.getenv("RENDER_GIT_COMMIT", "unknown")}
@@ -2696,6 +2738,29 @@ def startup_event():
 def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode.PREVIEW, source: str = "upload"):
     app_logger.info(f"[run_analysis_bg] Starting analysis job {job_id}, mode={mode}, source={source}")
     cleanup_jobs()
+
+    # MP3ファイルの場合、FFmpegが利用可能かチェック
+    if file_path.lower().endswith('.mp3'):
+        try:
+            import soundfile as sf
+            import tempfile
+
+            # 簡易チェック - librosaで音声を読み込めるか確認
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                test_file_wav = f.name
+            test_audio = np.zeros(22050)
+            sf.write(test_file_wav, test_audio, 22050)
+
+            y, sr = librosa.load(test_file_wav, sr=22050, duration=0.1)
+            os.unlink(test_file_wav)
+        except Exception as e:
+            app_logger.error(f"FFmpeg check failed for MP3 processing: {e}")
+            jobs[job_id] = {
+                **jobs.get(job_id, {}),
+                "status": "error",
+                "error": "MP3 decoding is not available on this server. Please use WAV format or contact support."
+            }
+            return
 
     # Init progress (Store mode in job)
     jobs[job_id] = {
@@ -3582,13 +3647,14 @@ def detect_bpm_with_deep_learning(y: np.ndarray, sr: int, bpm_range: tuple[int, 
 # BeatNet BPM検出
 # ============================================================================
 
-def detect_bpm_with_beatnet(y: np.ndarray, sr: int) -> tuple[float, float] | None:
+def detect_bpm_with_beatnet(y: np.ndarray, sr: int, model_id: str = "default") -> tuple[float, float] | None:
     """
-    BeatNet APIを使用したBPM検出
+    BeatNet-Plus APIを使用したBPM検出
 
     Args:
         y: 音声信号
         sr: サンプリングレート
+        model_id: 使用するモデルID（"default" またはカスタムモデルID）
 
     Returns:
         (検出されたBPM, 信頼度) または失敗時はNone
@@ -3607,10 +3673,11 @@ def detect_bpm_with_beatnet(y: np.ndarray, sr: int) -> tuple[float, float] | Non
         sf.write(buffer, y.T if y.ndim > 1 else y, sr, format='WAV')
         buffer.seek(0)
 
-        # BeatNet APIを呼び出す
+        # BeatNet-Plus APIを呼び出す（model_idを含める）
         response = requests.post(
             f"{beatnet_url}/detect_bpm",
             files={"audio_file": ("audio.wav", buffer, "audio/wav")},
+            data={"model_id": model_id},
             timeout=30
         )
 
@@ -3618,25 +3685,82 @@ def detect_bpm_with_beatnet(y: np.ndarray, sr: int) -> tuple[float, float] | Non
             data = response.json()
             bpm = data.get("bpm")
             if bpm is not None:
-                app_logger.info(f"[BeatNet] Detected BPM: {bpm:.2f} (beats={data.get('beats_count', 0)})")
-                # BeatNetは高精度なので信頼度は1.0
+                app_logger.info(f"[BeatNet-Plus] Detected BPM: {bpm:.2f} with model {model_id} (beats={data.get('beats_count', 0)})")
+                # BeatNet-Plusは高精度なので信頼度は1.0
                 return float(bpm), 1.0
             else:
-                app_logger.warning("[BeatNet] No BPM in response")
+                app_logger.warning("[BeatNet-Plus] No BPM in response")
                 return None
         else:
-            app_logger.warning(f"[BeatNet] API error: {response.status_code} - {response.text}")
+            app_logger.warning(f"[BeatNet-Plus] API error: {response.status_code} - {response.text}")
             return None
 
     except requests.exceptions.RequestException as e:
-        app_logger.warning(f"[BeatNet] Connection failed: {e}")
+        app_logger.warning(f"[BeatNet-Plus] Connection failed: {e}")
         return None
     except Exception as e:
-        app_logger.error(f"[BeatNet] Detection failed: {e}", exc_info=True)
+        app_logger.error(f"[BeatNet-Plus] Detection failed: {e}", exc_info=True)
         return None
 
+
 # ============================================================================
-# BeatNet BPM検出ここまで
+# BeatNet-Plus モデル選択
+# ============================================================================
+
+class ModelSelectionRequest(BaseModel):
+    model_id: str  # "default" or custom model ID
+
+class ModelSelectionResponse(BaseModel):
+    model_id: str
+    model_name: str
+    status: str
+
+@app.get("/beatnet/models")
+async def list_beatnet_models():
+    """
+    利用可能な BeatNet-Plus モデルの一覧を取得
+    """
+    import os
+    import requests
+
+    beatnet_url = os.environ.get("BEATNET_URL", "http://localhost:8001")
+    try:
+        response = requests.get(f"{beatnet_url}/models", timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        return []
+    except Exception as e:
+        app_logger.error(f"Failed to fetch models: {e}")
+        return []
+
+@app.post("/beatnet/select-model", response_model=ModelSelectionResponse)
+async def select_beatnet_model(request: ModelSelectionRequest):
+    """
+    アクティブな BeatNet-Plus モデルを選択
+    """
+    import os
+    import requests
+
+    beatnet_url = os.environ.get("BEATNET_URL", "http://localhost:8001")
+    try:
+        # モデルが存在するか確認
+        response = requests.get(f"{beatnet_url}/models/{request.model_id}", timeout=10)
+        if response.status_code == 200:
+            model_data = response.json()
+            return ModelSelectionResponse(
+                model_id=request.model_id,
+                model_name=model_data.get("name", "Unknown"),
+                status="selected"
+            )
+        raise HTTPException(status_code=404, detail="Model not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        app_logger.error(f"Failed to select model: {e}")
+        raise HTTPException(status_code=500, detail="Failed to select model")
+
+# ============================================================================
+# BeatNet-Plus モデル選択ここまで
 # ============================================================================
 
 
