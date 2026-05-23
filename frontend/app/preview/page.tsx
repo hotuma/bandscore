@@ -177,7 +177,10 @@ export default function PreviewPage() {
                 try {
                     console.log(`[upload] start analyzeAudio attempt ${attempt}`);
                     // initiate analysis with 25s timeout (Fail fast -> Retry)
-                    response = await analyzeAudio(safeFile, 'PREVIEW', 25000, { signal: controller.signal });
+                    response = await analyzeAudio(safeFile, 'PREVIEW', {
+                        signal: controller.signal,
+                        timeoutMs: 25000,
+                    });
                     console.log("[upload] analyzeAudio returned", response);
 
                     if (response?.job_id) break;
