@@ -8,15 +8,27 @@ interface FileUploadProps {
     isLoading?: boolean;
 }
 
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+
 export default function FileUpload({ onFileSelect, onUrlSelect, isLoading = false }: FileUploadProps) {
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [url, setUrl] = useState('');
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [cookieFile, setCookieFile] = useState<File | null>(null);
+    const [fileError, setFileError] = useState<string | null>(null);
 
     const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+        setFileError(null);
         if (e.target.files && e.target.files[0]) {
             const file = e.target.files[0];
+
+            // Check file size
+            if (file.size > MAX_FILE_SIZE) {
+                setFileError(`File size exceeds ${MAX_FILE_SIZE / 1024 / 1024}MB limit. Please use a smaller file or YouTube URL.`);
+                setSelectedFile(null);
+                return;
+            }
+
             setSelectedFile(file);
             onFileSelect(file);
         }
@@ -52,6 +64,11 @@ export default function FileUpload({ onFileSelect, onUrlSelect, isLoading = fals
                         disabled={isLoading}
                     />
                 </label>
+                {fileError && (
+                    <div className="mt-2 text-sm text-red-600">
+                        {fileError}
+                    </div>
+                )}
             </div>
 
             <div className="relative flex items-center justify-center">
