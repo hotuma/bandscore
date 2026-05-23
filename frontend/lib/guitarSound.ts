@@ -15,7 +15,7 @@ export function invalidateScheduled(): void {
     _scheduleToken++;
 }
 
-function ensureAudioContext(): AudioContext {
+export function ensureAudioContext(): AudioContext {
     if (!audioContext) {
         const AC = window.AudioContext || (window as any).webkitAudioContext;
         audioContext = new AC();

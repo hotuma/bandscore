@@ -63,7 +63,7 @@ export default function BeatsEditor({
     } else {
       // Add new beat (Shift+click for downbeat)
       const newType = e.shiftKey ? 1 : 0;
-      setBeats([...beats, [clickTime, newType]].sort((a, b) => a[0] - b[0]));
+      setBeats([...beats, [clickTime, newType]] as Array<[number, number]>);
     }
   };
 

@@ -214,7 +214,7 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
         let beatCount = 0;
 
         const playClick = () => {
-            const audioContext = getAudioContextTime();
+            const audioContext = initAudioContext();
             if (!audioContext) return;
 
             const oscillator = audioContext.createOscillator();
