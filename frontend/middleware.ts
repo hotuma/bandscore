@@ -4,6 +4,9 @@ import type { NextRequest } from 'next/server';
 export function middleware(request: NextRequest) {
     const { pathname } = request.nextUrl;
 
+    // Lab protection disabled - allowing public access
+    // To re-enable, uncomment the code below
+    /*
     // Only protect /lab routes
     if (pathname.startsWith('/lab')) {
         // Exception for login page and its children (e.g. actions)
@@ -21,6 +24,7 @@ export function middleware(request: NextRequest) {
             return NextResponse.redirect(loginUrl);
         }
     }
+    */
 
     return NextResponse.next();
 }
@@ -29,7 +33,8 @@ export const config = {
     matcher: [
         /*
          * Match all request paths starting with /lab
+         * Lab protection disabled - matcher kept for potential future use
          */
-        '/lab/:path*',
+        // '/lab/:path*',
     ],
 };

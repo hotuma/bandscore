@@ -1,0 +1,61 @@
+FROM python:3.9-slim
+
+# システムパッケージのインストール
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libsndfile1 \
+    ffmpeg \
+    portaudio19-dev \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# 作業ディレクトリの設定
+WORKDIR /app
+
+# pipをアップグレード
+RUN pip install --upgrade pip setuptools wheel
+
+# PyTorch (for BeatNet-Plus)
+RUN pip install --no-cache-dir torch==2.2.0 torchaudio==2.2.0
+
+# Audio processing libraries
+# Cython (madmomビルド用)
+RUN pip install --no-cache-dir cython
+
+# Audio processing libraries (madmom 互換性のために numpy 1.23.5)
+RUN pip install --no-cache-dir \
+    numpy==1.23.5 \
+    scipy==1.11.4 \
+    librosa==0.10.1 \
+    soundfile==0.12.1
+
+# madmom を先にインストール（ビルドに時間がかかる）
+RUN pip install --no-cache-dir --no-build-isolation madmom==0.16.1
+
+# BeatNet-Plus をインストール
+RUN git clone https://github.com/mjhydri/BeatNet-Plus.git /tmp/beatnetplus && \
+    cd /tmp/beatnetplus && \
+    pip install -e .
+
+# API関連パッケージをインストール
+RUN pip install --no-cache-dir \
+    fastapi==0.104.1 \
+    uvicorn==0.24.0 \
+    python-multipart==0.0.6 \
+    pyyaml \
+    'setuptools<72'
+
+# numpy をダウングレード（madmom 互換性のために戻す）
+RUN pip install --no-cache-dir --force-reinstall 'numpy==1.23.5'
+
+# ディレクトリ作成
+RUN mkdir -p /app/models /app/training_data /app/training_jobs
+
+# APIサービスのコピー
+COPY backend/beatnetplus_service.py /app/
+
+# ポート8000を公開
+EXPOSE 8000
+
+# サービス起動
+CMD ["uvicorn", "beatnetplus_service:app", "--host", "0.0.0.0", "--port", "8000"]

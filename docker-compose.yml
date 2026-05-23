@@ -1,21 +1,28 @@
 version: '3.8'
 
 services:
-  beatnet-service:
+  beatnet-plus-service:
     build:
       context: .
-      dockerfile: Dockerfile.beatnet
-    container_name: beatnet-service
+      dockerfile: Dockerfile.beatnetplus
+    container_name: beatnet-plus-service
     ports:
       - "8001:8000"
     networks:
       - bandscore-network
+    volumes:
+      # トレーニング済みモデルを永続化
+      - ./beatnetplus_models:/app/models
+      # トレーニングデータを永続化
+      - ./beatnetplus_training:/app/training_data
+      # トレーニングジョブを永続化
+      - ./beatnetplus_jobs:/app/training_jobs
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 90s
 
   backend:
     build:
@@ -25,14 +32,15 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - BEATNET_URL=http://beatnet-service:8000
+      - BEATNET_URL=http://beatnet-plus-service:8000
     depends_on:
-      beatnet-service:
+      beatnet-plus-service:
         condition: service_healthy
     networks:
       - bandscore-network
     volumes:
       - ./backend:/app
+      - ./beatnetplus_models:/app/beatnetplus_models:ro  # 読み取り専用アクセス
 
 networks:
   bandscore-network:

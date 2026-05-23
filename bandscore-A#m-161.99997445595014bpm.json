@@ -1,0 +1,3043 @@
+{
+  "version": "1.0",
+  "exportedAt": "2026-05-06T14:20:15.046Z",
+  "metadata": {
+    "bpm": 161.99997445595014,
+    "key": "A#m",
+    "timeSignature": "4/4",
+    "durationSec": 300,
+    "totalBars": 202
+  },
+  "bars": [
+    {
+      "index": 1,
+      "chord": "C#maj7",
+      "startSec": 1.4229,
+      "endSec": 2.9043,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 2,
+      "chord": "C#maj7",
+      "startSec": 2.9043,
+      "endSec": 4.3858,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 3,
+      "chord": "C#maj7",
+      "startSec": 4.3858,
+      "endSec": 5.8673,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 4,
+      "chord": "C#maj7",
+      "startSec": 5.8673,
+      "endSec": 7.3488,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 5,
+      "chord": "C#maj7",
+      "startSec": 7.3488,
+      "endSec": 8.8303,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 6,
+      "chord": "C#maj7",
+      "startSec": 8.8303,
+      "endSec": 10.3117,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 7,
+      "chord": "C#maj7",
+      "startSec": 10.3117,
+      "endSec": 11.7932,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 8,
+      "chord": "C#maj7",
+      "startSec": 11.7932,
+      "endSec": 13.2747,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 9,
+      "chord": "A#m7",
+      "startSec": 13.2747,
+      "endSec": 14.7562,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 10,
+      "chord": "C#maj7",
+      "startSec": 14.7562,
+      "endSec": 16.2377,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 11,
+      "chord": "C#maj7",
+      "startSec": 16.2377,
+      "endSec": 17.7191,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 12,
+      "chord": "C#maj7",
+      "startSec": 17.7191,
+      "endSec": 19.2006,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 13,
+      "chord": "C#maj7",
+      "startSec": 19.2006,
+      "endSec": 20.6821,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 14,
+      "chord": "C#maj7",
+      "startSec": 20.6821,
+      "endSec": 22.1636,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 15,
+      "chord": "C#maj7",
+      "startSec": 22.1636,
+      "endSec": 23.6451,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 16,
+      "chord": "C#maj7",
+      "startSec": 23.6451,
+      "endSec": 25.1266,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 17,
+      "chord": "C#maj7",
+      "startSec": 25.1266,
+      "endSec": 26.608,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 18,
+      "chord": "A#m7",
+      "startSec": 26.608,
+      "endSec": 28.0895,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 19,
+      "chord": "A#m7",
+      "startSec": 28.0895,
+      "endSec": 29.571,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 20,
+      "chord": "A#m7",
+      "startSec": 29.571,
+      "endSec": 31.0525,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 21,
+      "chord": "A#m7",
+      "startSec": 31.0525,
+      "endSec": 32.534,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 22,
+      "chord": "A#m7",
+      "startSec": 32.534,
+      "endSec": 34.0154,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 23,
+      "chord": "A#m7",
+      "startSec": 34.0154,
+      "endSec": 35.4969,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 24,
+      "chord": "A#m7",
+      "startSec": 35.4969,
+      "endSec": 36.9784,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 25,
+      "chord": "A#m7",
+      "startSec": 36.9784,
+      "endSec": 38.4599,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 26,
+      "chord": "C#maj7",
+      "startSec": 38.4599,
+      "endSec": 39.9414,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 27,
+      "chord": "A#m7",
+      "startSec": 39.9414,
+      "endSec": 41.4229,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 28,
+      "chord": "A#m7",
+      "startSec": 41.4229,
+      "endSec": 42.9043,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 29,
+      "chord": "A#m7",
+      "startSec": 42.9043,
+      "endSec": 44.3858,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 30,
+      "chord": "A#m7",
+      "startSec": 44.3858,
+      "endSec": 45.8673,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 31,
+      "chord": "A#m7",
+      "startSec": 45.8673,
+      "endSec": 47.3488,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 32,
+      "chord": "A#m7",
+      "startSec": 47.3488,
+      "endSec": 48.8303,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 33,
+      "chord": "A#m7",
+      "startSec": 48.8303,
+      "endSec": 50.3117,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 34,
+      "chord": "A#m7",
+      "startSec": 50.3117,
+      "endSec": 51.7932,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 35,
+      "chord": "C#maj7",
+      "startSec": 51.7932,
+      "endSec": 53.2747,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 36,
+      "chord": "A#m7",
+      "startSec": 53.2747,
+      "endSec": 54.7562,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 37,
+      "chord": "A#m7",
+      "startSec": 54.7562,
+      "endSec": 56.2377,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 38,
+      "chord": "A#m7",
+      "startSec": 56.2377,
+      "endSec": 57.7191,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 39,
+      "chord": "A#m7",
+      "startSec": 57.7191,
+      "endSec": 59.2006,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 40,
+      "chord": "A#m7",
+      "startSec": 59.2006,
+      "endSec": 59.9075,
+      "durationSec": 0.7069,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 41,
+      "chord": "A#m7",
+      "startSec": 60.6822,
+      "endSec": 62.1636,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 42,
+      "chord": "C#sus4",
+      "startSec": 62.1636,
+      "endSec": 63.6451,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "6",
+        "6",
+        "7",
+        "4"
+      ]
+    },
+    {
+      "index": 43,
+      "chord": "G#m7",
+      "startSec": 63.6451,
+      "endSec": 65.1266,
+      "durationSec": 1.4815,
+      "tab": [
+        "4",
+        "6",
+        "4",
+        "4",
+        "4",
+        "4"
+      ]
+    },
+    {
+      "index": 44,
+      "chord": "C#m7",
+      "startSec": 65.1266,
+      "endSec": 66.6081,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "6",
+        "4",
+        "5",
+        "4"
+      ]
+    },
+    {
+      "index": 45,
+      "chord": "C#m7",
+      "startSec": 66.6081,
+      "endSec": 68.0896,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "6",
+        "4",
+        "5",
+        "4"
+      ]
+    },
+    {
+      "index": 46,
+      "chord": "C#m7",
+      "startSec": 68.0896,
+      "endSec": 69.571,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "6",
+        "4",
+        "5",
+        "4"
+      ]
+    },
+    {
+      "index": 47,
+      "chord": "G#m7",
+      "startSec": 69.571,
+      "endSec": 71.0525,
+      "durationSec": 1.4815,
+      "tab": [
+        "4",
+        "6",
+        "4",
+        "4",
+        "4",
+        "4"
+      ]
+    },
+    {
+      "index": 48,
+      "chord": "F#m7",
+      "startSec": 71.0525,
+      "endSec": 72.534,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "2",
+        "2",
+        "2",
+        "2"
+      ]
+    },
+    {
+      "index": 49,
+      "chord": "F#m7",
+      "startSec": 72.534,
+      "endSec": 74.0155,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "2",
+        "2",
+        "2",
+        "2"
+      ]
+    },
+    {
+      "index": 50,
+      "chord": "Emaj7",
+      "startSec": 74.0155,
+      "endSec": 75.497,
+      "durationSec": 1.4815,
+      "tab": [
+        "0",
+        "2",
+        "1",
+        "1",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "index": 51,
+      "chord": "C#m7",
+      "startSec": 75.497,
+      "endSec": 76.9785,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "6",
+        "4",
+        "5",
+        "4"
+      ]
+    },
+    {
+      "index": 52,
+      "chord": "D#sus4",
+      "startSec": 76.9785,
+      "endSec": 78.4599,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "6",
+        "8",
+        "8",
+        "9",
+        "6"
+      ]
+    },
+    {
+      "index": 53,
+      "chord": "F#m7",
+      "startSec": 78.4599,
+      "endSec": 79.9414,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "2",
+        "2",
+        "2",
+        "2"
+      ]
+    },
+    {
+      "index": 54,
+      "chord": "C#sus4",
+      "startSec": 79.9414,
+      "endSec": 81.4229,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "6",
+        "6",
+        "7",
+        "4"
+      ]
+    },
+    {
+      "index": 55,
+      "chord": "D#m7",
+      "startSec": 81.4229,
+      "endSec": 82.9044,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "6",
+        "8",
+        "6",
+        "7",
+        "6"
+      ]
+    },
+    {
+      "index": 56,
+      "chord": "C#m7",
+      "startSec": 82.9044,
+      "endSec": 84.3859,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "6",
+        "4",
+        "5",
+        "4"
+      ]
+    },
+    {
+      "index": 57,
+      "chord": "G#m7",
+      "startSec": 84.3859,
+      "endSec": 85.8673,
+      "durationSec": 1.4815,
+      "tab": [
+        "4",
+        "6",
+        "4",
+        "4",
+        "4",
+        "4"
+      ]
+    },
+    {
+      "index": 58,
+      "chord": "Amaj7",
+      "startSec": 85.8673,
+      "endSec": 87.3488,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "0",
+        "2",
+        "1",
+        "2",
+        "0"
+      ]
+    },
+    {
+      "index": 59,
+      "chord": "F#m7",
+      "startSec": 87.3488,
+      "endSec": 88.8303,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "2",
+        "2",
+        "2",
+        "2"
+      ]
+    },
+    {
+      "index": 60,
+      "chord": "D#m7",
+      "startSec": 88.8303,
+      "endSec": 89.9073,
+      "durationSec": 1.077,
+      "tab": [
+        "x",
+        "6",
+        "8",
+        "6",
+        "7",
+        "6"
+      ]
+    },
+    {
+      "index": 61,
+      "chord": "F#m7",
+      "startSec": 90.3118,
+      "endSec": 91.7933,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "2",
+        "2",
+        "2",
+        "2"
+      ]
+    },
+    {
+      "index": 62,
+      "chord": "C#maj7",
+      "startSec": 91.7933,
+      "endSec": 93.2748,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 63,
+      "chord": "Fm7",
+      "startSec": 93.2748,
+      "endSec": 94.7562,
+      "durationSec": 1.4815,
+      "tab": [
+        "1",
+        "3",
+        "1",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 64,
+      "chord": "C#maj7",
+      "startSec": 94.7562,
+      "endSec": 96.2377,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 65,
+      "chord": "G#7",
+      "startSec": 96.2377,
+      "endSec": 97.7192,
+      "durationSec": 1.4815,
+      "tab": [
+        "4",
+        "6",
+        "4",
+        "5",
+        "4",
+        "4"
+      ]
+    },
+    {
+      "index": 66,
+      "chord": "C#maj7",
+      "startSec": 97.7192,
+      "endSec": 99.2007,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 67,
+      "chord": "C#maj7",
+      "startSec": 99.2007,
+      "endSec": 100.6822,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 68,
+      "chord": "C#maj7",
+      "startSec": 100.6822,
+      "endSec": 102.1636,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 69,
+      "chord": "F#maj7",
+      "startSec": 102.1636,
+      "endSec": 103.6451,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "3",
+        "3",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 70,
+      "chord": "G#7",
+      "startSec": 103.6451,
+      "endSec": 105.1266,
+      "durationSec": 1.4815,
+      "tab": [
+        "4",
+        "6",
+        "4",
+        "5",
+        "4",
+        "4"
+      ]
+    },
+    {
+      "index": 71,
+      "chord": "G#7",
+      "startSec": 105.1266,
+      "endSec": 106.6081,
+      "durationSec": 1.4815,
+      "tab": [
+        "4",
+        "6",
+        "4",
+        "5",
+        "4",
+        "4"
+      ]
+    },
+    {
+      "index": 72,
+      "chord": "A#m7",
+      "startSec": 106.6081,
+      "endSec": 108.0896,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 73,
+      "chord": "A#m7",
+      "startSec": 108.0896,
+      "endSec": 109.571,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 74,
+      "chord": "F#maj7",
+      "startSec": 109.571,
+      "endSec": 111.0525,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "3",
+        "3",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 75,
+      "chord": "F#maj7",
+      "startSec": 111.0525,
+      "endSec": 112.534,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "3",
+        "3",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 76,
+      "chord": "G#7",
+      "startSec": 112.534,
+      "endSec": 114.0155,
+      "durationSec": 1.4815,
+      "tab": [
+        "4",
+        "6",
+        "4",
+        "5",
+        "4",
+        "4"
+      ]
+    },
+    {
+      "index": 77,
+      "chord": "A#m7",
+      "startSec": 114.0155,
+      "endSec": 115.497,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 78,
+      "chord": "C#maj7",
+      "startSec": 115.497,
+      "endSec": 116.9785,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 79,
+      "chord": "C#maj7",
+      "startSec": 116.9785,
+      "endSec": 118.4599,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 80,
+      "chord": "F#maj7",
+      "startSec": 118.4599,
+      "endSec": 119.9073,
+      "durationSec": 1.4474,
+      "tab": [
+        "2",
+        "4",
+        "3",
+        "3",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 81,
+      "chord": "Cm",
+      "startSec": 119.9414,
+      "endSec": 119.9073,
+      "durationSec": -0.0341,
+      "tab": [
+        "x",
+        "3",
+        "5",
+        "5",
+        "4",
+        "3"
+      ]
+    },
+    {
+      "index": 82,
+      "chord": "Cm",
+      "startSec": 121.4229,
+      "endSec": 122.9044,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "3",
+        "5",
+        "5",
+        "4",
+        "3"
+      ]
+    },
+    {
+      "index": 83,
+      "chord": "C#m7",
+      "startSec": 122.9044,
+      "endSec": 124.3859,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "6",
+        "4",
+        "5",
+        "4"
+      ]
+    },
+    {
+      "index": 84,
+      "chord": "F#m7",
+      "startSec": 124.3859,
+      "endSec": 125.8673,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "2",
+        "2",
+        "2",
+        "2"
+      ]
+    },
+    {
+      "index": 85,
+      "chord": "F#m7",
+      "startSec": 125.8673,
+      "endSec": 127.3488,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "2",
+        "2",
+        "2",
+        "2"
+      ]
+    },
+    {
+      "index": 86,
+      "chord": "G#m7",
+      "startSec": 127.3488,
+      "endSec": 128.8303,
+      "durationSec": 1.4815,
+      "tab": [
+        "4",
+        "6",
+        "4",
+        "4",
+        "4",
+        "4"
+      ]
+    },
+    {
+      "index": 87,
+      "chord": "C#m7",
+      "startSec": 128.8303,
+      "endSec": 130.3118,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "6",
+        "4",
+        "5",
+        "4"
+      ]
+    },
+    {
+      "index": 88,
+      "chord": "C#m7",
+      "startSec": 130.3118,
+      "endSec": 131.7933,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "6",
+        "4",
+        "5",
+        "4"
+      ]
+    },
+    {
+      "index": 89,
+      "chord": "G#m7",
+      "startSec": 131.7933,
+      "endSec": 133.2748,
+      "durationSec": 1.4815,
+      "tab": [
+        "4",
+        "6",
+        "4",
+        "4",
+        "4",
+        "4"
+      ]
+    },
+    {
+      "index": 90,
+      "chord": "F#m7",
+      "startSec": 133.2748,
+      "endSec": 134.7562,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "2",
+        "2",
+        "2",
+        "2"
+      ]
+    },
+    {
+      "index": 91,
+      "chord": "D#m7",
+      "startSec": 134.7562,
+      "endSec": 136.2377,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "6",
+        "8",
+        "6",
+        "7",
+        "6"
+      ]
+    },
+    {
+      "index": 92,
+      "chord": "C#m7",
+      "startSec": 136.2377,
+      "endSec": 137.7192,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "6",
+        "4",
+        "5",
+        "4"
+      ]
+    },
+    {
+      "index": 93,
+      "chord": "C#m7",
+      "startSec": 137.7192,
+      "endSec": 139.2007,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "6",
+        "4",
+        "5",
+        "4"
+      ]
+    },
+    {
+      "index": 94,
+      "chord": "D#sus4",
+      "startSec": 139.2007,
+      "endSec": 140.6822,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "6",
+        "8",
+        "8",
+        "9",
+        "6"
+      ]
+    },
+    {
+      "index": 95,
+      "chord": "C#sus4",
+      "startSec": 140.6822,
+      "endSec": 142.1636,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "6",
+        "6",
+        "7",
+        "4"
+      ]
+    },
+    {
+      "index": 96,
+      "chord": "D#m7",
+      "startSec": 142.1636,
+      "endSec": 143.6451,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "6",
+        "8",
+        "6",
+        "7",
+        "6"
+      ]
+    },
+    {
+      "index": 97,
+      "chord": "D#m7",
+      "startSec": 143.6451,
+      "endSec": 145.1266,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "6",
+        "8",
+        "6",
+        "7",
+        "6"
+      ]
+    },
+    {
+      "index": 98,
+      "chord": "C#m7",
+      "startSec": 145.1266,
+      "endSec": 146.6081,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "6",
+        "4",
+        "5",
+        "4"
+      ]
+    },
+    {
+      "index": 99,
+      "chord": "Amaj7",
+      "startSec": 146.6081,
+      "endSec": 148.0896,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "0",
+        "2",
+        "1",
+        "2",
+        "0"
+      ]
+    },
+    {
+      "index": 100,
+      "chord": "F#m7",
+      "startSec": 148.0896,
+      "endSec": 149.571,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "2",
+        "2",
+        "2",
+        "2"
+      ]
+    },
+    {
+      "index": 101,
+      "chord": "F#m7",
+      "startSec": 149.571,
+      "endSec": 149.9073,
+      "durationSec": 0.3363,
+      "tab": [
+        "2",
+        "4",
+        "2",
+        "2",
+        "2",
+        "2"
+      ]
+    },
+    {
+      "index": 102,
+      "chord": "F#m7",
+      "startSec": 151.0525,
+      "endSec": 152.534,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "2",
+        "2",
+        "2",
+        "2"
+      ]
+    },
+    {
+      "index": 103,
+      "chord": "C#maj7",
+      "startSec": 152.534,
+      "endSec": 154.0155,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 104,
+      "chord": "C#maj7",
+      "startSec": 154.0155,
+      "endSec": 155.497,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 105,
+      "chord": "F#maj7",
+      "startSec": 155.497,
+      "endSec": 156.9785,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "3",
+        "3",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 106,
+      "chord": "C#maj7",
+      "startSec": 156.9785,
+      "endSec": 158.4599,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 107,
+      "chord": "F#maj7",
+      "startSec": 158.4599,
+      "endSec": 159.9414,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "3",
+        "3",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 108,
+      "chord": "C#maj7",
+      "startSec": 159.9414,
+      "endSec": 161.4229,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 109,
+      "chord": "C#maj7",
+      "startSec": 161.4229,
+      "endSec": 162.9044,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 110,
+      "chord": "C#maj7",
+      "startSec": 162.9044,
+      "endSec": 164.3859,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 111,
+      "chord": "C#maj7",
+      "startSec": 164.3859,
+      "endSec": 165.8673,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 112,
+      "chord": "A#m7",
+      "startSec": 165.8673,
+      "endSec": 167.3488,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 113,
+      "chord": "F#maj7",
+      "startSec": 167.3488,
+      "endSec": 168.8303,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "3",
+        "3",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 114,
+      "chord": "F#maj7",
+      "startSec": 168.8303,
+      "endSec": 170.3118,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "3",
+        "3",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 115,
+      "chord": "G#7",
+      "startSec": 170.3118,
+      "endSec": 171.7933,
+      "durationSec": 1.4815,
+      "tab": [
+        "4",
+        "6",
+        "4",
+        "5",
+        "4",
+        "4"
+      ]
+    },
+    {
+      "index": 116,
+      "chord": "A#m7",
+      "startSec": 171.7933,
+      "endSec": 173.2748,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 117,
+      "chord": "A#m7",
+      "startSec": 173.2748,
+      "endSec": 174.7562,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 118,
+      "chord": "F#maj7",
+      "startSec": 174.7562,
+      "endSec": 176.2377,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "3",
+        "3",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 119,
+      "chord": "F#maj7",
+      "startSec": 176.2377,
+      "endSec": 177.7192,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "3",
+        "3",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 120,
+      "chord": "C#maj7",
+      "startSec": 177.7192,
+      "endSec": 179.2007,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 121,
+      "chord": "A#m7",
+      "startSec": 179.2007,
+      "endSec": 179.9073,
+      "durationSec": 0.7066,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 122,
+      "chord": "Cm",
+      "startSec": 180.6822,
+      "endSec": 182.1636,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "3",
+        "5",
+        "5",
+        "4",
+        "3"
+      ]
+    },
+    {
+      "index": 123,
+      "chord": "F#maj7",
+      "startSec": 182.1636,
+      "endSec": 183.6451,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "3",
+        "3",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 124,
+      "chord": "F#maj7",
+      "startSec": 183.6451,
+      "endSec": 185.1266,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "3",
+        "3",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 125,
+      "chord": "D#m7",
+      "startSec": 185.1266,
+      "endSec": 186.6081,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "6",
+        "8",
+        "6",
+        "7",
+        "6"
+      ]
+    },
+    {
+      "index": 126,
+      "chord": "C#maj7",
+      "startSec": 186.6081,
+      "endSec": 188.0896,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 127,
+      "chord": "C#maj7",
+      "startSec": 188.0896,
+      "endSec": 189.571,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 128,
+      "chord": "F#maj7",
+      "startSec": 189.571,
+      "endSec": 191.0525,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "3",
+        "3",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 129,
+      "chord": "F#maj7",
+      "startSec": 191.0525,
+      "endSec": 192.534,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "3",
+        "3",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 130,
+      "chord": "G#7",
+      "startSec": 192.534,
+      "endSec": 194.0155,
+      "durationSec": 1.4815,
+      "tab": [
+        "4",
+        "6",
+        "4",
+        "5",
+        "4",
+        "4"
+      ]
+    },
+    {
+      "index": 131,
+      "chord": "C#maj7",
+      "startSec": 194.0155,
+      "endSec": 195.497,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 132,
+      "chord": "Cm7",
+      "startSec": 195.497,
+      "endSec": 196.9785,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "3",
+        "5",
+        "3",
+        "4",
+        "3"
+      ]
+    },
+    {
+      "index": 133,
+      "chord": "C#maj7",
+      "startSec": 196.9785,
+      "endSec": 198.4599,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 134,
+      "chord": "F#maj7",
+      "startSec": 198.4599,
+      "endSec": 199.9414,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "3",
+        "3",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 135,
+      "chord": "G#7",
+      "startSec": 199.9414,
+      "endSec": 201.4229,
+      "durationSec": 1.4815,
+      "tab": [
+        "4",
+        "6",
+        "4",
+        "5",
+        "4",
+        "4"
+      ]
+    },
+    {
+      "index": 136,
+      "chord": "C#maj7",
+      "startSec": 201.4229,
+      "endSec": 202.9044,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 137,
+      "chord": "C#maj7",
+      "startSec": 202.9044,
+      "endSec": 204.3859,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 138,
+      "chord": "A#m7",
+      "startSec": 204.3859,
+      "endSec": 205.8673,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 139,
+      "chord": "C#maj7",
+      "startSec": 205.8673,
+      "endSec": 207.3488,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 140,
+      "chord": "D#sus4",
+      "startSec": 207.3488,
+      "endSec": 208.8303,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "6",
+        "8",
+        "8",
+        "9",
+        "6"
+      ]
+    },
+    {
+      "index": 141,
+      "chord": "Fm7",
+      "startSec": 208.8303,
+      "endSec": 209.9073,
+      "durationSec": 1.077,
+      "tab": [
+        "1",
+        "3",
+        "1",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 142,
+      "chord": "Cm",
+      "startSec": 210.3118,
+      "endSec": 211.7933,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "3",
+        "5",
+        "5",
+        "4",
+        "3"
+      ]
+    },
+    {
+      "index": 143,
+      "chord": "D#7",
+      "startSec": 211.7933,
+      "endSec": 213.2748,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "6",
+        "8",
+        "6",
+        "8",
+        "6"
+      ]
+    },
+    {
+      "index": 144,
+      "chord": "C#maj7",
+      "startSec": 213.2748,
+      "endSec": 214.7562,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 145,
+      "chord": "Fm7",
+      "startSec": 214.7562,
+      "endSec": 216.2377,
+      "durationSec": 1.4815,
+      "tab": [
+        "1",
+        "3",
+        "1",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 146,
+      "chord": "C#maj7",
+      "startSec": 216.2377,
+      "endSec": 217.7192,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 147,
+      "chord": "C#maj7",
+      "startSec": 217.7192,
+      "endSec": 219.2007,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 148,
+      "chord": "C#maj7",
+      "startSec": 219.2007,
+      "endSec": 220.6822,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 149,
+      "chord": "Fm7",
+      "startSec": 220.6822,
+      "endSec": 222.1636,
+      "durationSec": 1.4815,
+      "tab": [
+        "1",
+        "3",
+        "1",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 150,
+      "chord": "C#maj7",
+      "startSec": 222.1636,
+      "endSec": 223.6451,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 151,
+      "chord": "Fm7",
+      "startSec": 223.6451,
+      "endSec": 225.1266,
+      "durationSec": 1.4815,
+      "tab": [
+        "1",
+        "3",
+        "1",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 152,
+      "chord": "C#maj7",
+      "startSec": 225.1266,
+      "endSec": 226.6081,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 153,
+      "chord": "C#maj7",
+      "startSec": 226.6081,
+      "endSec": 228.0896,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 154,
+      "chord": "A#m7",
+      "startSec": 228.0896,
+      "endSec": 229.571,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 155,
+      "chord": "C#maj7",
+      "startSec": 229.571,
+      "endSec": 231.0525,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 156,
+      "chord": "Fm7",
+      "startSec": 231.0525,
+      "endSec": 232.534,
+      "durationSec": 1.4815,
+      "tab": [
+        "1",
+        "3",
+        "1",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 157,
+      "chord": "C#maj7",
+      "startSec": 232.534,
+      "endSec": 234.0155,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 158,
+      "chord": "C#maj7",
+      "startSec": 234.0155,
+      "endSec": 235.497,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 159,
+      "chord": "D#7",
+      "startSec": 235.497,
+      "endSec": 236.9785,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "6",
+        "8",
+        "6",
+        "8",
+        "6"
+      ]
+    },
+    {
+      "index": 160,
+      "chord": "C#maj7",
+      "startSec": 236.9785,
+      "endSec": 238.4599,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 161,
+      "chord": "D#7",
+      "startSec": 238.4599,
+      "endSec": 239.9073,
+      "durationSec": 1.4474,
+      "tab": [
+        "x",
+        "6",
+        "8",
+        "6",
+        "8",
+        "6"
+      ]
+    },
+    {
+      "index": 162,
+      "chord": "Fm7",
+      "startSec": 239.9414,
+      "endSec": 239.9073,
+      "durationSec": -0.0341,
+      "tab": [
+        "1",
+        "3",
+        "1",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 163,
+      "chord": "Fm7",
+      "startSec": 241.4229,
+      "endSec": 242.9044,
+      "durationSec": 1.4815,
+      "tab": [
+        "1",
+        "3",
+        "1",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 164,
+      "chord": "Fm7",
+      "startSec": 242.9044,
+      "endSec": 244.3859,
+      "durationSec": 1.4815,
+      "tab": [
+        "1",
+        "3",
+        "1",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 165,
+      "chord": "C#maj7",
+      "startSec": 244.3859,
+      "endSec": 245.8673,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 166,
+      "chord": "Fm7",
+      "startSec": 245.8673,
+      "endSec": 247.3488,
+      "durationSec": 1.4815,
+      "tab": [
+        "1",
+        "3",
+        "1",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 167,
+      "chord": "C#maj7",
+      "startSec": 247.3488,
+      "endSec": 248.8303,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 168,
+      "chord": "C#maj7",
+      "startSec": 248.8303,
+      "endSec": 250.3118,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 169,
+      "chord": "Fm7",
+      "startSec": 250.3118,
+      "endSec": 251.7933,
+      "durationSec": 1.4815,
+      "tab": [
+        "1",
+        "3",
+        "1",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 170,
+      "chord": "C#maj7",
+      "startSec": 251.7933,
+      "endSec": 253.2748,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 171,
+      "chord": "C#maj7",
+      "startSec": 253.2748,
+      "endSec": 254.7562,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 172,
+      "chord": "Fm7",
+      "startSec": 254.7562,
+      "endSec": 256.2377,
+      "durationSec": 1.4815,
+      "tab": [
+        "1",
+        "3",
+        "1",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 173,
+      "chord": "C#maj7",
+      "startSec": 256.2377,
+      "endSec": 257.7192,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 174,
+      "chord": "C#maj7",
+      "startSec": 257.7192,
+      "endSec": 259.2007,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 175,
+      "chord": "Fm7",
+      "startSec": 259.2007,
+      "endSec": 260.6822,
+      "durationSec": 1.4815,
+      "tab": [
+        "1",
+        "3",
+        "1",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 176,
+      "chord": "C#maj7",
+      "startSec": 260.6822,
+      "endSec": 262.1636,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 177,
+      "chord": "G#maj7",
+      "startSec": 262.1636,
+      "endSec": 263.6451,
+      "durationSec": 1.4815,
+      "tab": [
+        "4",
+        "6",
+        "5",
+        "5",
+        "4",
+        "3"
+      ]
+    },
+    {
+      "index": 178,
+      "chord": "C#maj7",
+      "startSec": 263.6451,
+      "endSec": 265.1266,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 179,
+      "chord": "A#m7",
+      "startSec": 265.1266,
+      "endSec": 266.6081,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 180,
+      "chord": "A#m7",
+      "startSec": 266.6081,
+      "endSec": 268.0896,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 181,
+      "chord": "C#maj7",
+      "startSec": 268.0896,
+      "endSec": 269.571,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 182,
+      "chord": "G#maj7",
+      "startSec": 269.571,
+      "endSec": 269.9073,
+      "durationSec": 0.3363,
+      "tab": [
+        "4",
+        "6",
+        "5",
+        "5",
+        "4",
+        "3"
+      ]
+    },
+    {
+      "index": 183,
+      "chord": "G#maj7",
+      "startSec": 271.0525,
+      "endSec": 272.534,
+      "durationSec": 1.4815,
+      "tab": [
+        "4",
+        "6",
+        "5",
+        "5",
+        "4",
+        "3"
+      ]
+    },
+    {
+      "index": 184,
+      "chord": "D#7",
+      "startSec": 272.534,
+      "endSec": 274.0155,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "6",
+        "8",
+        "6",
+        "8",
+        "6"
+      ]
+    },
+    {
+      "index": 185,
+      "chord": "Fm7",
+      "startSec": 274.0155,
+      "endSec": 275.497,
+      "durationSec": 1.4815,
+      "tab": [
+        "1",
+        "3",
+        "1",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 186,
+      "chord": "A#m7",
+      "startSec": 275.497,
+      "endSec": 276.9785,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 187,
+      "chord": "G#maj7",
+      "startSec": 276.9785,
+      "endSec": 278.4599,
+      "durationSec": 1.4815,
+      "tab": [
+        "4",
+        "6",
+        "5",
+        "5",
+        "4",
+        "3"
+      ]
+    },
+    {
+      "index": 188,
+      "chord": "C#maj7",
+      "startSec": 278.4599,
+      "endSec": 279.9414,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 189,
+      "chord": "C#maj7",
+      "startSec": 279.9414,
+      "endSec": 281.4229,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 190,
+      "chord": "A#m7",
+      "startSec": 281.4229,
+      "endSec": 282.9044,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 191,
+      "chord": "Gm7",
+      "startSec": 282.9044,
+      "endSec": 284.3859,
+      "durationSec": 1.4815,
+      "tab": [
+        "3",
+        "5",
+        "3",
+        "3",
+        "3",
+        "3"
+      ]
+    },
+    {
+      "index": 192,
+      "chord": "G#maj7",
+      "startSec": 284.3859,
+      "endSec": 285.8673,
+      "durationSec": 1.4815,
+      "tab": [
+        "4",
+        "6",
+        "5",
+        "5",
+        "4",
+        "3"
+      ]
+    },
+    {
+      "index": 193,
+      "chord": "A#m7",
+      "startSec": 285.8673,
+      "endSec": 287.3488,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "1",
+        "3",
+        "1",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 194,
+      "chord": "C#maj7",
+      "startSec": 287.3488,
+      "endSec": 288.8303,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 195,
+      "chord": "D#7",
+      "startSec": 288.8303,
+      "endSec": 290.3118,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "6",
+        "8",
+        "6",
+        "8",
+        "6"
+      ]
+    },
+    {
+      "index": 196,
+      "chord": "F#maj7",
+      "startSec": 290.3118,
+      "endSec": 291.7933,
+      "durationSec": 1.4815,
+      "tab": [
+        "2",
+        "4",
+        "3",
+        "3",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "index": 197,
+      "chord": "C#maj7",
+      "startSec": 291.7933,
+      "endSec": 293.2748,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 198,
+      "chord": "G#",
+      "startSec": 293.2748,
+      "endSec": 294.7562,
+      "durationSec": 1.4815,
+      "tab": [
+        "4",
+        "6",
+        "6",
+        "5",
+        "4",
+        "4"
+      ]
+    },
+    {
+      "index": 199,
+      "chord": "C#maj7",
+      "startSec": 294.7562,
+      "endSec": 296.2377,
+      "durationSec": 1.4815,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 200,
+      "chord": "Fsus4",
+      "startSec": 296.2377,
+      "endSec": 297.7192,
+      "durationSec": 1.4815,
+      "tab": [
+        "1",
+        "3",
+        "3",
+        "3",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 201,
+      "chord": "Fm7",
+      "startSec": 297.7192,
+      "endSec": 299.2007,
+      "durationSec": 1.4815,
+      "tab": [
+        "1",
+        "3",
+        "1",
+        "1",
+        "1",
+        "1"
+      ]
+    },
+    {
+      "index": 202,
+      "chord": "C#maj7",
+      "startSec": 299.2007,
+      "endSec": 299.9073,
+      "durationSec": 0.7066,
+      "tab": [
+        "x",
+        "4",
+        "3",
+        "1",
+        "1",
+        "1"
+      ]
+    }
+  ]
+}
