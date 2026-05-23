@@ -967,6 +967,14 @@ export default function ResultDisplay({ result, audioUrl }: ResultDisplayProps) 
                 </div>
             )}
 
+            {/* No bars message */}
+            {safeBars.length === 0 && (
+                <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 p-4 rounded-lg">
+                    <p className="font-medium">No chord data generated</p>
+                    <p className="text-sm mt-1">The audio analysis completed but no chords were detected. This may happen with very short audio or unusual audio content.</p>
+                </div>
+            )}
+
             {/* Header Stats */}
             <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex justify-around items-center">
                 <div className="text-center">
