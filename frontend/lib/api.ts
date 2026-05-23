@@ -76,34 +76,99 @@ function normalizeAnalysisResult(data: any): AnalysisResult {
     return data as AnalysisResult;
 }
 
-export async function analyzeAudio(file: File, mode: AnalyzeMode = 'EARLY_ACCESS', timeoutMs: number = 180000, opts?: { signal?: AbortSignal }): Promise<AnalysisResult> {
+export interface AnalyzeAudioOptions {
+    signal?: AbortSignal;
+    onProgress?: (progress: number) => void; // 0-1 scale
+    timeoutMs?: number;
+}
+
+export async function analyzeAudio(
+    file: File,
+    mode: AnalyzeMode = 'EARLY_ACCESS',
+    opts: AnalyzeAudioOptions = {}
+): Promise<AnalysisResult> {
+    const { signal, onProgress, timeoutMs = 300000 } = opts;
+
     const formData = new FormData();
     formData.append('file', file);
 
     let url = `${API_URL}/analyze`;
-
-    // Strict Routing
     if (mode === 'PREVIEW') {
         url = `${API_URL}/analyze/preview`;
-        // Do NOT append mode for preview endpoint (server enforces it)
     } else {
         formData.append('mode', mode);
     }
 
-    const response = await fetchWithTimeout(url, {
+    // Step 1: Submit job (backend returns 202 with job_id)
+    const submitResponse = await fetchWithTimeout(url, {
         method: 'POST',
         body: formData,
-        timeout: timeoutMs,
-        signal: opts?.signal,
+        timeout: 60000, // 60s for upload only
+        signal,
     });
 
-    if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
+    if (!submitResponse.ok) {
+        const errorData = await submitResponse.json().catch(() => ({}));
         throw new Error(errorData.detail || 'Analysis failed');
     }
 
-    const data = await response.json();
-    return normalizeAnalysisResult(data);
+    const submitData = await submitResponse.json();
+    const jobId = submitData.job_id;
+
+    // Backward compatibility: if no job_id, return direct result
+    if (!jobId) {
+        return normalizeAnalysisResult(submitData);
+    }
+
+    // Step 2: Poll for completion
+    const pollInterval = 1500; // 1.5 seconds
+    const startTime = Date.now();
+    let lastProgress = -1;
+    let lastUpdateTime = Date.now();
+
+    while (Date.now() - startTime < timeoutMs) {
+        if (signal?.aborted) throw new Error('Cancelled');
+
+        await new Promise(r => setTimeout(r, pollInterval));
+        if (signal?.aborted) throw new Error('Cancelled');
+
+        const statusRes = await fetch(`${API_URL}/analyze/status/${jobId}`, { signal });
+        if (statusRes.status === 404) {
+            throw new Error('Job not found. Please try again.');
+        }
+        const statusData = await statusRes.json();
+
+        // Update progress (normalize 0-100 to 0-1)
+        const rawProgress = typeof statusData.progress === 'number' ? statusData.progress : 0;
+        const progress = rawProgress > 1 ? rawProgress / 100 : rawProgress;
+        onProgress?.(progress);
+
+        // Startup check: if no started_at after 15s, job is stuck
+        if (!statusData.started_at && Date.now() - startTime > 15000) {
+            throw new Error('Server is not responding. Backend may not be running.');
+        }
+
+        // Stall check: if progress hasn't moved in 120s, timeout
+        if (progress > lastProgress) {
+            lastProgress = progress;
+            lastUpdateTime = Date.now();
+        } else if (Date.now() - lastUpdateTime > 120000) {
+            throw new Error('Analysis timed out (no progress for 2 minutes). Please try again.');
+        }
+
+        if (statusData.status === 'error') {
+            throw new Error(statusData.error || 'Analysis failed on server');
+        }
+
+        if (statusData.status === 'done') {
+            const resultRes = await fetch(`${API_URL}/analyze/result/${jobId}`, { signal });
+            if (!resultRes.ok) throw new Error('Failed to fetch analysis result');
+            const resultData = await resultRes.json();
+            return normalizeAnalysisResult(resultData);
+        }
+    }
+
+    throw new Error('Analysis timed out. Please try again.');
 }
 
 export async function analyzeYoutube(url: string, cookiesFile?: File, mode: AnalyzeMode = 'EARLY_ACCESS'): Promise<AnalysisResult> {

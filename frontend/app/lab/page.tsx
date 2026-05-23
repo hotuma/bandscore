@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import Link from 'next/link';
 import FileUpload from '../../components/FileUpload';
 import ResultDisplay from '../../components/ResultDisplay';
@@ -28,6 +28,8 @@ export default function LabHome() {
     const [error, setError] = useState<string | null>(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [audioUrl, setAudioUrl] = useState<string | null>(null);
+    const [progress, setProgress] = useState<number>(0);
+    const abortControllerRef = useRef<AbortController | null>(null);
 
     const handleFileSelect = async (file: File) => {
         if (isAnalyzing) return;
@@ -35,6 +37,12 @@ export default function LabHome() {
         setError(null);
         setResult(null);
         setIsAnalyzing(true);
+        setProgress(0);
+
+        // Cancel any previous job
+        abortControllerRef.current?.abort();
+        const controller = new AbortController();
+        abortControllerRef.current = controller;
 
         // Create URL for playback locally (prefer local blob for uploads for speed)
         if (audioUrl) {
@@ -44,14 +52,22 @@ export default function LabHome() {
         setAudioUrl(blobUrl);
 
         try {
-            const data = await analyzeAudio(file);
+            const data = await analyzeAudio(file, 'EARLY_ACCESS', {
+                signal: controller.signal,
+                onProgress: (p) => setProgress(p),
+                timeoutMs: 300000,
+            });
             setResult(data);
-            // If we wanted to use the server URL: setAudioUrl(`${API_BASE_URL}${data.audio_url}`);
-        } catch (err) {
-            setError(err instanceof Error ? err.message : 'An error occurred');
+        } catch (err: any) {
+            if (err.message === 'Cancelled') {
+                setError('Analysis was cancelled');
+            } else {
+                setError(err instanceof Error ? err.message : 'An error occurred');
+            }
             setAudioUrl(null);
         } finally {
             setIsAnalyzing(false);
+            setProgress(0);
         }
     };
 
@@ -65,7 +81,11 @@ export default function LabHome() {
         setError(null);
         setResult(null);
         setIsAnalyzing(true);
+        setProgress(0);
         setAudioUrl(null); // Clear previous
+
+        // Cancel any previous job
+        abortControllerRef.current?.abort();
 
         try {
             const data = await analyzeYoutube(url, cookiesFile);
@@ -87,6 +107,7 @@ export default function LabHome() {
             setError(msg);
         } finally {
             setIsAnalyzing(false);
+            setProgress(0);
         }
     };
 
@@ -130,8 +151,18 @@ export default function LabHome() {
                     {isAnalyzing && (
                         <div className="mt-12 text-center py-12">
                             <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-blue-600 border-t-transparent mb-4"></div>
-                            <p className="text-gray-500 font-medium animate-pulse">Analyzing audio...</p>
-                            <p className="text-xs text-gray-400 mt-2">This might take a few seconds depending on the file size.</p>
+                            <p className="text-gray-500 font-medium animate-pulse mb-2">
+                                Analyzing audio... {Math.round(progress * 100)}%
+                            </p>
+                            <div className="max-w-xs mx-auto mb-2">
+                                <div className="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden">
+                                    <div
+                                        className="bg-blue-600 h-2.5 rounded-full transition-all duration-300 ease-out"
+                                        style={{ width: `${Math.round(progress * 100)}%` }}
+                                    />
+                                </div>
+                            </div>
+                            <p className="text-xs text-gray-400">This might take a minute depending on the file size.</p>
                         </div>
                     )}
 
