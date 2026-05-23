@@ -8,4 +8,5 @@ scipy==1.11.4
 soundfile
 yt-dlp
 psutil
-BeatNet==1.0.2
+# BeatNet requires Python <3.12, removed for now
+# BeatNet>=1.1.0
