@@ -8,5 +8,3 @@ scipy==1.11.4
 soundfile
 yt-dlp
 psutil
-numba>=0.56.0
-BeatNet==1.1.3
