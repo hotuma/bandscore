@@ -2694,17 +2694,33 @@ def health():
 def check_ffmpeg():
     """FFmpegが利用可能かチェックするエンドポイント"""
     try:
+        import subprocess
+
+        # FFmpeg binary check
+        result = subprocess.run(
+            ['ffmpeg', '-version'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode != 0:
+            return {
+                "status": "error",
+                "ffmpeg_available": False,
+                "message": "FFmpeg binary not found or not executable"
+            }
+
+        # Test MP3 decoding with librosa
         import tempfile
         import soundfile as sf
 
-        # テスト用の短い音声を作成
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-            test_file_wav = f.name.replace(".mp3", ".wav")
-            # 1秒のサイレント音声をWAVで保存
-            test_audio = np.zeros(22050)
-            sf.write(test_file_wav, test_audio, 22050)
+        # Create a test WAV file
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            test_file_wav = f.name
+        test_audio = np.zeros(22050)
+        sf.write(test_file_wav, test_audio, 22050)
 
-        # librosaで読み込みを試みる（FFmpegが必要）
+        # Load the file with librosa
         y, sr = librosa.load(test_file_wav, sr=22050, duration=0.1)
         os.unlink(test_file_wav)
 
@@ -2712,6 +2728,18 @@ def check_ffmpeg():
             "status": "ok",
             "ffmpeg_available": True,
             "message": "FFmpeg is properly configured for audio decoding"
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error",
+            "ffmpeg_available": False,
+            "message": "FFmpeg check timed out"
+        }
+    except FileNotFoundError:
+        return {
+            "status": "error",
+            "ffmpeg_available": False,
+            "message": "FFmpeg binary not found in PATH"
         }
     except Exception as e:
         return {
@@ -2743,17 +2771,16 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
     # MP3ファイルの場合、FFmpegが利用可能かチェック
     if file_path.lower().endswith('.mp3'):
         try:
-            import soundfile as sf
-            import tempfile
-
-            # 簡易チェック - librosaで音声を読み込めるか確認
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                test_file_wav = f.name
-            test_audio = np.zeros(22050)
-            sf.write(test_file_wav, test_audio, 22050)
-
-            y, sr = librosa.load(test_file_wav, sr=22050, duration=0.1)
-            os.unlink(test_file_wav)
+            import subprocess
+            # FFmpeg binary check
+            result = subprocess.run(
+                ['ffmpeg', '-version'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode != 0:
+                raise RuntimeError("FFmpeg binary not found")
         except Exception as e:
             app_logger.error(f"FFmpeg check failed for MP3 processing: {e}")
             jobs[job_id] = {

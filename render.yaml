@@ -5,6 +5,8 @@ services:
     plan: free
     envVars:
       - key: PYTHON_VERSION
-        value: 3.12.7
+        value: 3.12
+      - key: MAX_ANALYSIS_SEC
+        value: 120
       - key: MAX_ANALYSIS_SEC
         value: 120
