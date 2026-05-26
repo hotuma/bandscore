@@ -40,6 +40,10 @@ logging.getLogger("numba").setLevel(logging.WARNING)
 logging.getLogger("numba.core.byteflow").setLevel(logging.WARNING)
 logging.getLogger("numba.core.interpreter").setLevel(logging.WARNING)
 
+# Force librosa to use soundfile backend instead of audioread (avoids pkg_resources issue)
+os.environ["LIBROSA_BACKEND"] = "soundfile"
+app_logger.info("Set LIBROSA_BACKEND=soundfile to avoid pkg_resources dependency")
+
 # アプリケーションログ用の設定
 app_logger = logging.getLogger(__name__)
 app_logger.setLevel(logging.DEBUG)
@@ -2722,24 +2726,13 @@ def check_ffmpeg():
                 "message": "FFmpeg binary not found or not executable"
             }
 
-        # Test MP3 decoding with librosa
-        import tempfile
-        import soundfile as sf
-
-        # Create a test WAV file
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            test_file_wav = f.name
-        test_audio = np.zeros(22050)
-        sf.write(test_file_wav, test_audio, 22050)
-
-        # Load the file with librosa
-        y, sr = librosa.load(test_file_wav, sr=22050, duration=0.1)
-        os.unlink(test_file_wav)
+        # Extract version from output
+        version_line = result.stdout.split('\n')[0]
 
         return {
             "status": "ok",
             "ffmpeg_available": True,
-            "message": "FFmpeg is properly configured for audio decoding"
+            "message": f"FFmpeg is installed: {version_line}"
         }
     except subprocess.TimeoutExpired:
         return {
@@ -2757,7 +2750,7 @@ def check_ffmpeg():
         return {
             "status": "error",
             "ffmpeg_available": False,
-            "message": f"FFmpeg or audio codec not available: {e}"
+            "message": f"FFmpeg check failed: {e}"
         }
 
 @app.get("/version")
