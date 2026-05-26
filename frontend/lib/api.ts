@@ -103,7 +103,7 @@ export async function analyzeAudio(
     const submitResponse = await fetchWithTimeout(url, {
         method: 'POST',
         body: formData,
-        timeout: 60000, // 60s for upload only
+        timeout: 120000, // 120s for upload (allow for Render wake-up)
         signal,
     });
 
