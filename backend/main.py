@@ -3,6 +3,18 @@ import anyio
 import sys
 import logging
 
+# Preload setuptools to ensure pkg_resources is available before librosa uses it
+try:
+    import pkg_resources
+except ImportError:
+    try:
+        import setuptools
+        from setuptools import _distutils
+        # Force initialization
+        _distutils.__version__
+    except Exception as e:
+        sys.stderr.write(f"Warning: Could not initialize setuptools/pkg_resources: {e}\n")
+
 import psutil
 
 # 無効化stdoutバッファリング
