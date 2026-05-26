@@ -40,13 +40,13 @@ logging.getLogger("numba").setLevel(logging.WARNING)
 logging.getLogger("numba.core.byteflow").setLevel(logging.WARNING)
 logging.getLogger("numba.core.interpreter").setLevel(logging.WARNING)
 
-# Force librosa to use soundfile backend instead of audioread (avoids pkg_resources issue)
-os.environ["LIBROSA_BACKEND"] = "soundfile"
-app_logger.info("Set LIBROSA_BACKEND=soundfile to avoid pkg_resources dependency")
-
 # アプリケーションログ用の設定
 app_logger = logging.getLogger(__name__)
 app_logger.setLevel(logging.DEBUG)
+
+# Force librosa to use soundfile backend instead of audioread (avoids pkg_resources issue)
+os.environ["LIBROSA_BACKEND"] = "soundfile"
+app_logger.info("Set LIBROSA_BACKEND=soundfile to avoid pkg_resources dependency")
 
 # 明示的にハンドラーを追加（絶対パス）
 log_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backend_app.log')
