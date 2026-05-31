@@ -46,6 +46,8 @@ app_logger.setLevel(logging.DEBUG)
 
 # Force librosa to use soundfile backend instead of audioread (avoids pkg_resources issue)
 os.environ["LIBROSA_BACKEND"] = "soundfile"
+# Also try alternative methods
+os.environ["AUDIODIR"] = "soundfile"
 app_logger.info("Set LIBROSA_BACKEND=soundfile to avoid pkg_resources dependency")
 
 # 明示的にハンドラーを追加（絶対パス）
@@ -68,6 +70,13 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 import librosa
 import numpy as np
+
+# Explicitly set librosa audio backend to soundfile (avoids pkg_resources dependency)
+try:
+    librosa.set_audio_backend('soundfile')
+    app_logger.info("Set librosa audio backend to soundfile")
+except Exception as e:
+    app_logger.warning(f"Could not set librosa audio backend: {e}")
 
 # madmom for more accurate BPM detection (currently not installed - commented out)
 # from madmom.features.beats import BeatDetection, BeatTrackingProcessor
