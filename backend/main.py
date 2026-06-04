@@ -3,15 +3,39 @@ import anyio
 import sys
 import logging
 
-# Preload setuptools to ensure pkg_resources is available before librosa uses it
-# This is critical for audioread/librosa MP3 decoding
+# CRITICAL: Make pkg_resources available before any audio library imports
+# This fixes "No module named 'pkg_resources'" error from audioread/librosa
 try:
-    import setuptools
-    # Force pkg_resources to be available
-    from setuptools import _distutils
-    import pkg_resources as _pkg_resources_patch
-except Exception as e:
-    sys.stderr.write(f"Warning: Could not initialize setuptools/pkg_resources: {e}\n")
+    # Try direct import first
+    import pkg_resources
+except ImportError:
+    try:
+        # Fallback: setuptools might not expose pkg_resources at top level
+        import setuptools
+        from setuptools._distutils.dist import Distribution
+        # Force setuptools to expose pkg_resources
+        sys.modules['pkg_resources'] = setuptools.pkg_resources
+    except (ImportError, AttributeError):
+        try:
+            # Last resort: use importlib.metadata as replacement
+            from importlib.metadata import distributions, version, PackageNotFoundError
+            # Create a minimal pkg_resources shim
+            class _PkgResourcesShim:
+                @staticmethod
+                def get_distribution(name):
+                    try:
+                        from importlib.metadata import distribution
+                        d = distribution(name)
+                        return type('DistInfo', (), {
+                            'version': d.version,
+                            'project_name': d.metadata['Name'],
+                            'location': d.locate_file(''),
+                        })()
+                    except PackageNotFoundError:
+                        raise
+            sys.modules['pkg_resources'] = _PkgResourcesShim()
+        except Exception as e:
+            sys.stderr.write(f"Warning: Could not setup pkg_resources shim: {e}\n")
 
 import psutil
 
