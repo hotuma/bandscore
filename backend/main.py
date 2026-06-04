@@ -2816,16 +2816,19 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
     }
 
     def update_progress(p: float):
-        p = max(0.0, min(100.0, p))
-        job = jobs.get(job_id, {})
-        # Only update if job still exists
-        if job:
-            jobs[job_id] = {
-                **job,
-                "progress": p,
-                "updated_at": time.time(),
-                "started_at": job.get("started_at", time.time())
-            }
+        try:
+            p = max(0.0, min(100.0, p))
+            job = jobs.get(job_id, {})
+            # Only update if job still exists
+            if job:
+                jobs[job_id] = {
+                    **job,
+                    "progress": p,
+                    "updated_at": time.time(),
+                    "started_at": job.get("started_at", time.time())
+                }
+        except Exception as e:
+            app_logger.error(f"[update_progress] Failed to update progress for job {job_id}: {e}")
         
     # FORCE UPDATE to prove thread is alive (2%)
     update_progress(2.0)
@@ -2868,14 +2871,17 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
 
         chunk_idx = 0
         offset = 0.0
-        
+
+        # Safety limit to prevent infinite loops
+        max_chunks = 100
+
         # Estimate total chunks for progress calculation (assuming MAX)
         # This is an approximation since we might stop early, but ensures 0-100 scale
         estimated_total_chunks = int(math.ceil(MAX_ANALYSIS_SEC / CHUNK_SEC))
 
         FIRST_CHUNK_SEC = 60.0  # 初回チャンクは60秒（BPM検出精度のため）
 
-        while offset < MAX_ANALYSIS_SEC:
+        while offset < MAX_ANALYSIS_SEC and chunk_idx < max_chunks:
             if chunk_idx == 0:
                 dur = min(FIRST_CHUNK_SEC, MAX_ANALYSIS_SEC - offset)
             else:
@@ -3093,7 +3099,7 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
         }
     except Exception as e:
         # Catch-all for thread safety
-        print(f"[ERROR] Thread crashed: {e}")
+        app_logger.error(f"[run_analysis_bg] Analysis failed for job {job_id}: {e}", exc_info=True)
         import traceback
         traceback.print_exc()
         jobs[job_id] = {
