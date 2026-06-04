@@ -7,6 +7,4 @@ services:
       - key: PYTHON_VERSION
         value: 3.12
       - key: MAX_ANALYSIS_SEC
-        value: 120
-      - key: MAX_ANALYSIS_SEC
-        value: 120
+        value: 60

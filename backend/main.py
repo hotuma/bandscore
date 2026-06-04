@@ -2448,6 +2448,18 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
                       f"{phase_offset_sec*1000:.1f}ms -> {refined_phase*1000:.1f}ms")
             phase_offset_sec = refined_phase
 
+        # Memory check before chroma computation (critical point)
+        try:
+            chroma_mem_mb = psutil.Process().memory_info().rss / 1024 / 1024
+            app_logger.info(f"[Memory] Before chroma: {chroma_mem_mb:.1f}MB")
+            if chroma_mem_mb > 350:  # 350MB超過で早期リターン
+                raise MemoryError(f"Memory limit ({chroma_mem_mb:.1f}MB) reached before chroma computation. "
+                                 f"Try a shorter audio file or use a higher tier plan.")
+        except Exception as mem_e:
+            if isinstance(mem_e, MemoryError):
+                raise
+            app_logger.warning(f"[Memory] Could not check memory before chroma: {mem_e}")
+
         # 3. Chroma
         app_logger.debug("Computing chroma (CQT + HPSS, bins_per_octave=36)...")
         hop_length = 2048  # 4096→2048: 時間解像度2倍（~93ms@22050Hz）
@@ -2825,6 +2837,24 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
                 "error": "MP3 decoding is not available on this server. Please use WAV format or contact support."
             }
             return
+
+    # Initial memory check (Render free tier: 512MB limit)
+    try:
+        process = psutil.Process()
+        initial_mem_mb = process.memory_info().rss / 1024 / 1024
+        app_logger.info(f"[Memory] Initial check: {initial_mem_mb:.1f}MB")
+        if initial_mem_mb > 200:  # 200MB以上使用している場合は拒否
+            error_msg = f"Server memory is high ({initial_mem_mb:.1f}MB). Please try again later."
+            app_logger.error(f"[OOM-Precheck] {error_msg}")
+            jobs[job_id] = {
+                **jobs.get(job_id, {}),
+                "status": "error",
+                "error": error_msg,
+                "done_at": time.time()
+            }
+            return
+    except Exception as mem_e:
+        app_logger.warning(f"[Memory] Could not check initial memory: {mem_e}")
 
     # Init progress (Store mode in job)
     jobs[job_id] = {
