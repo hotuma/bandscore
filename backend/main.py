@@ -2868,7 +2868,8 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
         app_logger.warning(f"[Memory] Could not check initial memory: {mem_e}")
 
     # Concurrent job limit check (Render free tier can only handle 1 job at a time)
-    active_jobs = [j for j in jobs.values() if j.get("status") == "analyzing"]
+    # Exclude self (current job_id) from the count
+    active_jobs = [j for jid, j in jobs.items() if j.get("status") == "analyzing" and jid != job_id]
     if len(active_jobs) > 0:
         error_msg = f"Another analysis is in progress. Please wait for it to complete."
         app_logger.warning(f"[Concurrency] {len(active_jobs)} active job(s), rejecting new job")
