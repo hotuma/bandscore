@@ -2843,7 +2843,7 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
         process = psutil.Process()
         initial_mem_mb = process.memory_info().rss / 1024 / 1024
         app_logger.info(f"[Memory] Initial check: {initial_mem_mb:.1f}MB")
-        if initial_mem_mb > 200:  # 200MB以上使用している場合は拒否
+        if initial_mem_mb > 150:  # 150MB以上使用している場合は拒否（free tier: 512MB limit）
             error_msg = f"Server memory is high ({initial_mem_mb:.1f}MB). Please try again later."
             app_logger.error(f"[OOM-Precheck] {error_msg}")
             jobs[job_id] = {
@@ -2855,6 +2855,19 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
             return
     except Exception as mem_e:
         app_logger.warning(f"[Memory] Could not check initial memory: {mem_e}")
+
+    # Concurrent job limit check (Render free tier can only handle 1 job at a time)
+    active_jobs = [j for j in jobs.values() if j.get("status") == "analyzing"]
+    if len(active_jobs) > 0:
+        error_msg = f"Another analysis is in progress. Please wait for it to complete."
+        app_logger.warning(f"[Concurrency] {len(active_jobs)} active job(s), rejecting new job")
+        jobs[job_id] = {
+            **jobs.get(job_id, {}),
+            "status": "error",
+            "error": error_msg,
+            "done_at": time.time()
+        }
+        return
 
     # Init progress (Store mode in job)
     jobs[job_id] = {
