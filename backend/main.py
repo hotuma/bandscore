@@ -2448,13 +2448,18 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
                       f"{phase_offset_sec*1000:.1f}ms -> {refined_phase*1000:.1f}ms")
             phase_offset_sec = refined_phase
 
+        # Force garbage collection before chroma computation (memory-intensive)
+        import gc
+        gc.collect()
+        app_logger.info("[GC] Forced garbage collection before chroma")
+
         # Memory check before chroma computation (critical point)
         try:
             chroma_mem_mb = psutil.Process().memory_info().rss / 1024 / 1024
             app_logger.info(f"[Memory] Before chroma: {chroma_mem_mb:.1f}MB")
-            if chroma_mem_mb > 350:  # 350MB超過で早期リターン
+            if chroma_mem_mb > 450:  # 450MB超過で早期リターン（gc後に再チェック）
                 raise MemoryError(f"Memory limit ({chroma_mem_mb:.1f}MB) reached before chroma computation. "
-                                 f"Try a shorter audio file or use a higher tier plan.")
+                                 f"Try a shorter audio file.")
         except Exception as mem_e:
             if isinstance(mem_e, MemoryError):
                 raise
@@ -2838,13 +2843,19 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
             }
             return
 
+    # Force garbage collection before starting new job (free memory from previous jobs)
+    import gc
+    gc.collect()
+    app_logger.info("[GC] Forced garbage collection before new job")
+
     # Initial memory check (Render free tier: 512MB limit)
     try:
         process = psutil.Process()
         initial_mem_mb = process.memory_info().rss / 1024 / 1024
         app_logger.info(f"[Memory] Initial check: {initial_mem_mb:.1f}MB")
-        if initial_mem_mb > 150:  # 150MB以上使用している場合は拒否（free tier: 512MB limit）
-            error_msg = f"Server memory is high ({initial_mem_mb:.1f}MB). Please try again later."
+        # Only reject if extremely high (>450MB), otherwise try to proceed
+        if initial_mem_mb > 450:
+            error_msg = f"Server memory critically high ({initial_mem_mb:.1f}MB). Please try again in a few minutes."
             app_logger.error(f"[OOM-Precheck] {error_msg}")
             jobs[job_id] = {
                 **jobs.get(job_id, {}),
@@ -3057,8 +3068,8 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
                 mem_mb = process.memory_info().rss / 1024 / 1024
                 app_logger.info(f"[Memory] After chunk {chunk_idx}: {mem_mb:.1f}MB ({mem_percent:.1f}%)")
 
-                # Fail gracefully if memory is critical (>90% or >400MB)
-                if mem_percent > 90 or mem_mb > 400:
+                # Fail gracefully if memory is critical (>90% or >450MB)
+                if mem_percent > 90 or mem_mb > 450:
                     error_msg = f"Memory limit reached: {mem_mb:.1f}MB used. Try a shorter audio file."
                     app_logger.error(f"[OOM] {error_msg}")
                     jobs[job_id] = {
@@ -3070,6 +3081,10 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
                     return
             except Exception as mem_e:
                 app_logger.warning(f"[Memory] Could not check memory: {mem_e}")
+
+            # Force garbage collection after each chunk to free memory
+            import gc
+            gc.collect()
 
             offset += dur
             chunk_idx += 1
