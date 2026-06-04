@@ -3006,7 +3006,28 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
             if actual_dur < (dur - 0.5) or actual_dur <= 0.1:
                 offset += actual_dur
                 break
-            
+
+            # Memory check after each chunk (Render free tier: 512MB limit)
+            try:
+                process = psutil.Process()
+                mem_percent = process.memory_percent()
+                mem_mb = process.memory_info().rss / 1024 / 1024
+                app_logger.info(f"[Memory] After chunk {chunk_idx}: {mem_mb:.1f}MB ({mem_percent:.1f}%)")
+
+                # Fail gracefully if memory is critical (>90% or >400MB)
+                if mem_percent > 90 or mem_mb > 400:
+                    error_msg = f"Memory limit reached: {mem_mb:.1f}MB used. Try a shorter audio file."
+                    app_logger.error(f"[OOM] {error_msg}")
+                    jobs[job_id] = {
+                        **jobs.get(job_id, {}),
+                        "status": "error",
+                        "error": error_msg,
+                        "done_at": time.time()
+                    }
+                    return
+            except Exception as mem_e:
+                app_logger.warning(f"[Memory] Could not check memory: {mem_e}")
+
             offset += dur
             chunk_idx += 1
 
