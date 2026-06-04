@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y \
 
 # Python依存関係をコピーしてインストール
 COPY requirements.txt .
+# Install setuptools first to ensure pkg_resources is available
+RUN pip install --no-cache-dir --upgrade setuptools
 RUN pip install --no-cache-dir -r requirements.txt
 
 # アプリケーションコードをコピー
