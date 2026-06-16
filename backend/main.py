@@ -3307,12 +3307,12 @@ def _save_and_analyze(job_id: str, file_content: bytes, file_path: str, mode: An
         with open(file_path, "wb") as f:
             f.write(file_content)
 
-        # Update job status to "analyzing" and start analysis
+        # Update job status to "analyzing" with initial progress
         jobs[job_id] = {
             **jobs.get(job_id, {}),
             "status": "analyzing",
             "mode": mode,
-            "progress": 0.01,
+            "progress": 5.0,  # 5% to show progress early (prevent frontend timeout)
             "updated_at": time.time(),
             "started_at": time.time()
         }
