@@ -3253,10 +3253,10 @@ async def _process_analyze(file: UploadFile, mode: AnalyzeMode):
     file.file.seek(0, os.SEEK_END)
     size = file.file.tell()
     file.file.seek(0)
-    
+
     if size > 20 * 1024 * 1024: # 20MB
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail={"error": {"code": "FILE_TOO_LARGE", "message": "File size exceeds 20MB limit."}}
         )
 
@@ -3273,25 +3273,60 @@ async def _process_analyze(file: UploadFile, mode: AnalyzeMode):
 
     job_id = str(uuid.uuid4())
     now = time.time()
+
+    # Read file content into memory BEFORE starting background thread
+    # This ensures we have the data even if the request closes
+    file_content = await file.read()
+
+    # Create job entry immediately (status="pending" until file is saved)
     jobs[job_id] = {
-        "status": "analyzing",
+        "status": "pending",
         "submitted_at": now,
         "expires_at": now + JOB_TTL_SEC,
     }
 
+    # Return response immediately, then process file in background
     # Use a unique name for TEMP storage
     safe_filename = f"{job_id}{ext}"
     file_path = os.path.join(TEMP_DIR, safe_filename)
 
-    # Use to_thread to prevent blocking event loop during file save
-    # This solves the "pending" response issue for large uploads
-    await anyio.to_thread.run_sync(_save_upload_sync, file.file, file_path)
-
-    # Use Thread instead of BackgroundTasks for better survival on Render free tier
-    # (BackgroundTasks are tied to request lifecycle, Thread is slightly more detached)
-    threading.Thread(target=run_analysis_bg, args=(job_id, file_path, mode)).start()
+    # Start background thread for file save and analysis
+    threading.Thread(
+        target=_save_and_analyze,
+        args=(job_id, file_content, file_path, mode),
+        daemon=True
+    ).start()
 
     return JSONResponse(status_code=202, content={"job_id": job_id})
+
+# Helper function to save file and start analysis in background thread
+def _save_and_analyze(job_id: str, file_content: bytes, file_path: str, mode: AnalyzeMode):
+    try:
+        # Save file to disk
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        with open(file_path, "wb") as f:
+            f.write(file_content)
+
+        # Update job status to "analyzing" and start analysis
+        jobs[job_id] = {
+            **jobs.get(job_id, {}),
+            "status": "analyzing",
+            "mode": mode,
+            "progress": 0.01,
+            "updated_at": time.time(),
+            "started_at": time.time()
+        }
+
+        # Run analysis
+        run_analysis_bg(job_id, file_path, mode)
+    except Exception as e:
+        app_logger.error(f"[SaveAndAnalyze] Failed: {e}", exc_info=True)
+        jobs[job_id] = {
+            **jobs.get(job_id, {}),
+            "status": "error",
+            "error": str(e),
+            "done_at": time.time()
+        }
 
 @app.get("/analyze/status/{job_id}")
 def analyze_status(job_id: str):
