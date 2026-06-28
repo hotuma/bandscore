@@ -2906,6 +2906,26 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
                 }
         except Exception as e:
             app_logger.error(f"[update_progress] Failed to update progress for job {job_id}: {e}")
+
+    heartbeat_stop = threading.Event()
+
+    def heartbeat():
+        while not heartbeat_stop.wait(10.0):
+            try:
+                job = jobs.get(job_id)
+                if not job or job.get("status") != "analyzing":
+                    return
+                jobs[job_id] = {
+                    **job,
+                    "updated_at": time.time(),
+                    "started_at": job.get("started_at", time.time()),
+                }
+                app_logger.debug(f"[Heartbeat] job {job_id} still analyzing at {job.get('progress', 0.0)}%")
+            except Exception as e:
+                app_logger.warning(f"[Heartbeat] Failed for job {job_id}: {e}")
+                return
+
+    threading.Thread(target=heartbeat, daemon=True).start()
         
     # FORCE UPDATE to prove thread is alive (2%)
     update_progress(2.0)
@@ -3212,6 +3232,7 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
         }
 
     finally:
+        heartbeat_stop.set()
         try:
             if source == "upload" and os.path.exists(file_path):
                 os.remove(file_path)

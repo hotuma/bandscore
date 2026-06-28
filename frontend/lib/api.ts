@@ -125,6 +125,7 @@ export async function analyzeAudio(
     const startTime = Date.now();
     let lastProgress = -1;
     let lastUpdateTime = Date.now();
+    let lastServerUpdatedAt: number | string | null = null;
 
     while (Date.now() - startTime < timeoutMs) {
         if (signal?.aborted) throw new Error('Cancelled');
@@ -142,15 +143,18 @@ export async function analyzeAudio(
         const rawProgress = typeof statusData.progress === 'number' ? statusData.progress : 0;
         const progress = rawProgress > 1 ? rawProgress / 100 : rawProgress;
         onProgress?.(progress);
+        const serverUpdatedAt = statusData.updated_at ?? null;
 
         // Startup check: if no started_at after 15s, job is stuck
         if (!statusData.started_at && Date.now() - startTime > 15000) {
             throw new Error('Server is not responding. Backend may not be running.');
         }
 
-        // Stall check: if progress hasn't moved in 120s, timeout
-        if (progress > lastProgress) {
+        // Stall check: progress may be unchanged during heavy DSP work, so also
+        // treat server heartbeat (updated_at changes) as forward movement.
+        if (progress > lastProgress || (serverUpdatedAt !== null && serverUpdatedAt !== lastServerUpdatedAt)) {
             lastProgress = progress;
+            lastServerUpdatedAt = serverUpdatedAt;
             lastUpdateTime = Date.now();
         } else if (Date.now() - lastUpdateTime > 120000) {
             throw new Error('Analysis timed out (no progress for 2 minutes). Please try again.');
