@@ -2856,6 +2856,9 @@ def version():
 
 @app.on_event("startup")
 def startup_event():
+    if os.getenv("ENABLE_LIBROSA_WARMUP", "0").lower() not in ("1", "true", "yes"):
+        app_logger.info("[INFO] Librosa warmup skipped")
+        return
     # Warmup librosa on startup to reduce first-request latency
     try:
         y = np.zeros(22050)
@@ -2945,6 +2948,7 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
             job = jobs.get(job_id, {})
             # Only update if job still exists
             if job:
+                p = max(p, float(job.get("progress", 0.0) or 0.0))
                 jobs[job_id] = {
                     **job,
                     "progress": p,
@@ -3023,7 +3027,7 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
         # This is an approximation since we might stop early, but ensures 0-100 scale
         estimated_total_chunks = int(math.ceil(MAX_ANALYSIS_SEC / CHUNK_SEC))
 
-        FIRST_CHUNK_SEC = 60.0  # 初回チャンクは60秒（BPM検出精度のため）
+        FIRST_CHUNK_SEC = float(os.getenv("FIRST_CHUNK_SEC", "30"))  # Keep Render free tier memory stable.
 
         while offset < MAX_ANALYSIS_SEC and chunk_idx < max_chunks:
             if chunk_idx == 0:
@@ -3374,6 +3378,7 @@ def _save_and_analyze(job_id: str, file_content: bytes, file_path: str, mode: An
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, "wb") as f:
             f.write(file_content)
+        del file_content
 
         # Update job status to "analyzing" with initial progress
         jobs[job_id] = {
