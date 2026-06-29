@@ -2808,7 +2808,7 @@ async def ping():
 def health():
     return {
         "status": "ok",
-        "build": "build-v5.6.1-lowmem-stream-upload",
+        "build": "build-v5.6.2-render-safe-cap",
         "memory_mb": round(mem_mb(), 1),
         "active_jobs": sum(1 for j in jobs.values() if j.get("status") == "analyzing"),
         "env": {
@@ -2817,6 +2817,7 @@ def health():
             "FIRST_CHUNK_SEC": os.getenv("FIRST_CHUNK_SEC", ""),
             "LOW_MEMORY_CHROMA": os.getenv("LOW_MEMORY_CHROMA", ""),
             "ENABLE_LIBROSA_WARMUP": os.getenv("ENABLE_LIBROSA_WARMUP", ""),
+            "RENDER_SAFE_MAX_ANALYSIS_SEC": os.getenv("RENDER_SAFE_MAX_ANALYSIS_SEC", ""),
         },
     }
 
@@ -3003,15 +3004,16 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
     try:
         # --- Mode Enforcement ---
         # 1. Preview Hardcap
+        render_safe_cap_sec = float(os.getenv("RENDER_SAFE_MAX_ANALYSIS_SEC", "60"))
         if mode == AnalyzeMode.PREVIEW:
              # Force 60s hardcap (ignore environment or input)
-             MAX_ANALYSIS_SEC = 60.0
+             MAX_ANALYSIS_SEC = min(60.0, render_safe_cap_sec)
              app_logger.info(f"[run_analysis_bg] Mode: PREVIEW -> Forced duration 60.0s")
         elif mode == AnalyzeMode.EARLY_ACCESS:
-             MAX_ANALYSIS_SEC = float(os.getenv("MAX_ANALYSIS_SEC", "300"))
+             MAX_ANALYSIS_SEC = min(float(os.getenv("MAX_ANALYSIS_SEC", "60")), render_safe_cap_sec)
              app_logger.info(f"[run_analysis_bg] Mode: EARLY_ACCESS -> Max duration {MAX_ANALYSIS_SEC}s")
         else:  # FULL
-             MAX_ANALYSIS_SEC = float(os.getenv("MAX_ANALYSIS_SEC", "600"))
+             MAX_ANALYSIS_SEC = min(float(os.getenv("MAX_ANALYSIS_SEC", "60")), render_safe_cap_sec)
              app_logger.info(f"[run_analysis_bg] Mode: FULL -> Max duration {MAX_ANALYSIS_SEC}s")
 
         # 2. Usage Check (Early Access)
@@ -3020,7 +3022,7 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
             # Current: Simple 2-use limit placeholder (Logic would go here or at endpoint level)
             pass
             
-        CHUNK_SEC = float(os.getenv("CHUNK_SEC", "30"))
+        CHUNK_SEC = min(float(os.getenv("CHUNK_SEC", "15")), 15.0)
 
         # 3) Remove initial get_duration to avoid "decode stall"
         # We process until MAX_ANALYSIS_SEC or EOF
@@ -3046,7 +3048,7 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
         # This is an approximation since we might stop early, but ensures 0-100 scale
         estimated_total_chunks = int(math.ceil(MAX_ANALYSIS_SEC / CHUNK_SEC))
 
-        FIRST_CHUNK_SEC = float(os.getenv("FIRST_CHUNK_SEC", "30"))  # Keep Render free tier memory stable.
+        FIRST_CHUNK_SEC = min(float(os.getenv("FIRST_CHUNK_SEC", "15")), 15.0)  # Keep Render free tier memory stable.
 
         while offset < MAX_ANALYSIS_SEC and chunk_idx < max_chunks:
             if chunk_idx == 0:
