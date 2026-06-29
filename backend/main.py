@@ -514,6 +514,18 @@ def compute_chroma_cqt(y: np.ndarray, sr: int, hop_length: int = 2048) -> np.nda
     chroma_log = np.log1p(10.0 * chroma)
     return chroma_log / (np.sum(chroma_log, axis=0, keepdims=True) + 1e-8)
 
+def compute_chroma_stft_light(y: np.ndarray, sr: int, hop_length: int = 2048) -> np.ndarray:
+    """Low-memory chroma path for constrained hosts."""
+    chroma = librosa.feature.chroma_stft(
+        y=np.asarray(y, dtype=np.float32),
+        sr=sr,
+        hop_length=hop_length,
+        n_fft=2048,
+    ).astype(np.float32, copy=False)
+    chroma_log = np.log1p(np.float32(10.0) * chroma)
+    chroma_sum = np.sum(chroma_log, axis=0, keepdims=True) + np.float32(1e-8)
+    return (chroma_log / chroma_sum).astype(np.float32, copy=False)
+
 def apply_chroma_contrast(chroma: np.ndarray, filter_size: int = 50, blend: float = 0.25) -> np.ndarray:
     """
     ローリング最小値を減算してペダルトーン（通奏低音）を除去する。
@@ -548,6 +560,20 @@ def compute_bass_chroma(y: np.ndarray, sr: int, hop_length: int = 2048) -> np.nd
     chroma_log = np.log1p(k * chroma)
     chroma_norm = chroma_log / (np.sum(chroma_log, axis=0, keepdims=True) + 1e-8)
     return chroma_norm
+
+def compute_bass_chroma_light(y: np.ndarray, sr: int, hop_length: int = 2048) -> np.ndarray:
+    """Low-memory bass chroma path using a smaller STFT."""
+    y_bass = bandpass_filter(np.asarray(y, dtype=np.float32), sr, low_hz=60, high_hz=300)
+    chroma = librosa.feature.chroma_stft(
+        y=y_bass,
+        sr=sr,
+        hop_length=hop_length,
+        n_fft=2048,
+    ).astype(np.float32, copy=False)
+    del y_bass
+    chroma_log = np.log1p(np.float32(10.0) * chroma)
+    chroma_sum = np.sum(chroma_log, axis=0, keepdims=True) + np.float32(1e-8)
+    return (chroma_log / chroma_sum).astype(np.float32, copy=False)
 
 # --- Chord Templates ---
 
@@ -2025,6 +2051,7 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
     app_logger.debug(f"Starting analysis for {file_path} (offset={offset_sec}, dur={duration_limit_sec})")
     app_logger.info(f"mem start: {mem_mb():.1f} MB")
     _progress(5) # Start
+    low_memory_mode = os.getenv("LOW_MEMORY_CHROMA", "1").lower() not in ("0", "false", "no")
 
     try:
         # 1. Load & Preprocess
@@ -2361,7 +2388,7 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
 
         # Stage 2.8: BeatNetによるBPM検出（高精度）
         # BeatNetはロック/ポップス音楽に特化しており、高い精度を誇る
-        if forced_bpm is None:
+        if forced_bpm is None and not low_memory_mode:
             app_logger.info("[BeatNet] Attempting BeatNet BPM detection...")
             beatnet_result = detect_bpm_with_beatnet(y, sr)
             if beatnet_result is not None:
@@ -2452,27 +2479,43 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
         import gc
         gc.collect()
         app_logger.info("[GC] Forced garbage collection before chroma")
+        low_memory_mode = os.getenv("LOW_MEMORY_CHROMA", "1").lower() not in ("0", "false", "no")
 
         # Memory check before chroma computation (critical point)
         try:
             chroma_mem_mb = psutil.Process().memory_info().rss / 1024 / 1024
             app_logger.info(f"[Memory] Before chroma: {chroma_mem_mb:.1f}MB")
             if chroma_mem_mb > 450:  # 450MB超過で早期リターン（gc後に再チェック）
-                raise MemoryError(f"Memory limit ({chroma_mem_mb:.1f}MB) reached before chroma computation. "
-                                 f"Try a shorter audio file.")
+                low_memory_mode = True
+                app_logger.warning(f"[Memory] Enabling low-memory chroma path at {chroma_mem_mb:.1f}MB")
         except Exception as mem_e:
             if isinstance(mem_e, MemoryError):
                 raise
             app_logger.warning(f"[Memory] Could not check memory before chroma: {mem_e}")
 
+        if low_memory_mode:
+            try:
+                del onset_env
+                gc.collect()
+                app_logger.info("[GC] Released onset_env before low-memory chroma")
+            except Exception:
+                pass
+
         # 3. Chroma
-        app_logger.debug("Computing chroma (CQT + HPSS, bins_per_octave=36)...")
+        app_logger.debug("Computing chroma...")
         hop_length = 2048  # 4096→2048: 時間解像度2倍（~93ms@22050Hz）
-        chroma = compute_chroma_cqt(y, sr, hop_length=hop_length)
+        if low_memory_mode:
+            app_logger.info("Computing chroma using low-memory STFT path...")
+            chroma = compute_chroma_stft_light(y, sr, hop_length=hop_length)
+        else:
+            chroma = compute_chroma_cqt(y, sr, hop_length=hop_length)
         chroma = apply_chroma_contrast(chroma, filter_size=50)  # ペダルトーン除去
         app_logger.info(f"mem after chroma: {mem_mb():.1f} MB")
 
-        bass_chroma = compute_bass_chroma(y, sr, hop_length=hop_length)
+        if low_memory_mode:
+            bass_chroma = compute_bass_chroma_light(y, sr, hop_length=hop_length)
+        else:
+            bass_chroma = compute_bass_chroma(y, sr, hop_length=hop_length)
         bass_chroma = apply_chroma_contrast(bass_chroma, filter_size=50)  # ペダルトーン除去
         app_logger.info(f"mem after bass chroma: {mem_mb():.1f} MB")
         app_logger.debug(f"Chroma shape: {chroma.shape}, Bass chroma shape: {bass_chroma.shape}")
@@ -2492,7 +2535,7 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
         # --- ハイブリッド BPM 検出の統合 ---
         # 既存の BPM 検出結果とハイブリッド方法を比較し、より良い結果を採用
         # ただし、forced_bpm が渡されている場合はスキップ（2番目以降のチャンクでBPMを統一するため）
-        if forced_bpm is None:
+        if forced_bpm is None and not low_memory_mode:
             app_logger.debug("Integrating hybrid BPM detection...")
             try:
                 # 元のBPMを中心に±40 BPMの範囲でハイブリッド検出を実行
@@ -2572,12 +2615,13 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
         # 固定BPMグリッドではテンポ揺らぎに追従できず累積ドリフトが発生する。
         # librosa.beat.beat_track で実際のビート位置を検出し、セグメント境界に使用。
         # forced_phase（後続チャンク）では安定性のため固定グリッドを維持。
-        if forced_phase is not None:
+        if forced_phase is not None or low_memory_mode:
             # 後続チャンク: 固定グリッドで一貫性を保つ
             # beat_timesは1拍間隔で生成（aggregate_chroma_per_segmentがbeats_per_segmentでグループ化するため）
             beat_times = np.arange(phase_offset_sec, total_duration + target_segment_duration, beat_duration)
             beats_per_seg = forced_beats_per_seg if forced_beats_per_seg is not None else 2
-            app_logger.debug(f"Using fixed grid (forced_phase): beats_per_seg={beats_per_seg}, seg_dur={target_segment_duration:.3f}s")
+            grid_reason = "forced_phase" if forced_phase is not None else "low_memory_mode"
+            app_logger.debug(f"Using fixed grid ({grid_reason}): beats_per_seg={beats_per_seg}, seg_dur={target_segment_duration:.3f}s")
         else:
             # 初回チャンク: adaptive beat tracking
             try:
@@ -2626,7 +2670,10 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
                 beats_per_seg = 2
                 app_logger.debug(f"Beat tracker failed ({e}), using fixed grid")
 
-        del onset_env  # メモリ解放
+        try:
+            del onset_env  # メモリ解放
+        except UnboundLocalError:
+            pass
 
         num_segments = max(1, len(beat_times) - 1)
         app_logger.debug(f"BPM: {bpm:.2f}, Beat duration: {beat_duration:.3f}s, Segments: ~{num_segments}")
