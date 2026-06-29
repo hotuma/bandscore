@@ -224,11 +224,18 @@ JOB_TTL_SEC = 3600  # 1 hour
 
 def cleanup_jobs():
     now = time.time()
-    expired = [jid for jid, j in jobs.items() if j.get("expires_at", 0) < now]
+    stale_after_sec = float(os.getenv("STALE_JOB_SEC", "300"))
+    expired = [
+        jid
+        for jid, j in jobs.items()
+        if j.get("expires_at", 0) < now
+        or (
+            j.get("status") == "analyzing"
+            and now - float(j.get("updated_at") or j.get("started_at") or 0) > stale_after_sec
+        )
+    ]
     for jid in expired:
-        jobs.pop(jid, None)
-
-    for jid in expired:
+        app_logger.warning(f"[JobCleanup] Removing expired/stale job {jid}: {jobs.get(jid)}")
         jobs.pop(jid, None)
 
 def _save_upload_sync(src_fileobj, dst_path: str):
@@ -2799,7 +2806,19 @@ async def ping():
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "build": "build-v5.6.1-lowmem-stream-upload",
+        "memory_mb": round(mem_mb(), 1),
+        "active_jobs": sum(1 for j in jobs.values() if j.get("status") == "analyzing"),
+        "env": {
+            "MAX_ANALYSIS_SEC": os.getenv("MAX_ANALYSIS_SEC", ""),
+            "CHUNK_SEC": os.getenv("CHUNK_SEC", ""),
+            "FIRST_CHUNK_SEC": os.getenv("FIRST_CHUNK_SEC", ""),
+            "LOW_MEMORY_CHROMA": os.getenv("LOW_MEMORY_CHROMA", ""),
+            "ENABLE_LIBROSA_WARMUP": os.getenv("ENABLE_LIBROSA_WARMUP", ""),
+        },
+    }
 
 @app.get("/health/ffmpeg")
 def check_ffmpeg():
@@ -3346,26 +3365,39 @@ async def _process_analyze(file: UploadFile, mode: AnalyzeMode):
     job_id = str(uuid.uuid4())
     now = time.time()
 
-    # Read file content into memory BEFORE starting background thread
-    # This ensures we have the data even if the request closes
-    file_content = await file.read()
-
     # Create job entry immediately (status="pending" until file is saved)
     jobs[job_id] = {
         "status": "pending",
         "submitted_at": now,
         "expires_at": now + JOB_TTL_SEC,
+        "progress": 0.0,
+        "updated_at": now,
     }
 
-    # Return response immediately, then process file in background
     # Use a unique name for TEMP storage
     safe_filename = f"{job_id}{ext}"
     file_path = os.path.join(TEMP_DIR, safe_filename)
 
-    # Start background thread for file save and analysis
+    try:
+        file.file.seek(0)
+        await anyio.to_thread.run_sync(_save_upload_sync, file.file, file_path)
+    except Exception as e:
+        jobs.pop(job_id, None)
+        app_logger.error(f"[UploadSave] Failed to save upload: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to save uploaded file: {e}")
+
+    jobs[job_id] = {
+        **jobs.get(job_id, {}),
+        "status": "analyzing",
+        "mode": mode,
+        "progress": 5.0,
+        "updated_at": time.time(),
+        "started_at": time.time(),
+    }
+
     threading.Thread(
-        target=_save_and_analyze,
-        args=(job_id, file_content, file_path, mode),
+        target=run_analysis_bg,
+        args=(job_id, file_path, mode),
         daemon=True
     ).start()
 

@@ -8,3 +8,11 @@ services:
         value: 3.12
       - key: MAX_ANALYSIS_SEC
         value: 60
+      - key: CHUNK_SEC
+        value: 15
+      - key: FIRST_CHUNK_SEC
+        value: 15
+      - key: LOW_MEMORY_CHROMA
+        value: 1
+      - key: ENABLE_LIBROSA_WARMUP
+        value: 0
