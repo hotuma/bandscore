@@ -2069,6 +2069,15 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
     app_logger.info(f"mem start: {mem_mb():.1f} MB")
     _progress(5) # Start
     low_memory_mode = os.getenv("LOW_MEMORY_CHROMA", "1").lower() not in ("0", "false", "no")
+    fast_render_mode = os.getenv("FAST_RENDER_ANALYSIS", "1").lower() not in ("0", "false", "no")
+    if fast_render_mode and forced_bpm is None:
+        forced_bpm = float(os.getenv("FAST_RENDER_BPM", "120"))
+        forced_phase = float(os.getenv("FAST_RENDER_PHASE_SEC", "0"))
+        forced_beats_per_seg = int(os.getenv("FAST_RENDER_BEATS_PER_SEG", "2"))
+        app_logger.info(
+            f"[FastRender] Using fixed grid: bpm={forced_bpm}, "
+            f"phase={forced_phase}, beats_per_seg={forced_beats_per_seg}"
+        )
 
     try:
         # 1. Load & Preprocess
@@ -2105,15 +2114,23 @@ def analyze_audio_file(file_path: str, progress_callback=None, offset_sec: float
         # 2. Beat tracking
         # オンセット検出（BPM検出・位相検出の両方で使用）
         # パラメータ調整: より多くのオンセットを検出するために感度を上げる
-        onset_env = librosa.onset.onset_strength(y=y, sr=sr)
-        onset_frames_detected = librosa.onset.onset_detect(
-            onset_envelope=onset_env, sr=sr, units='frames',
-            backtrack=True, pre_max=3, post_max=3  # 感度向上
-        )
-        onset_set = set(onset_frames_detected.tolist())
-        total_frames = len(onset_env)
-        num_onsets = len(onset_frames_detected)
-        app_logger.debug(f"Detected {num_onsets} onsets in {total_frames} frames")
+        if forced_bpm is not None and forced_phase is not None:
+            onset_env = None
+            onset_frames_detected = np.array([], dtype=int)
+            onset_set = set()
+            total_frames = max(1, int(math.ceil(len(y) / 512)))
+            num_onsets = 0
+            app_logger.info("[FastRender] Skipping onset/BPM detection")
+        else:
+            onset_env = librosa.onset.onset_strength(y=y, sr=sr)
+            onset_frames_detected = librosa.onset.onset_detect(
+                onset_envelope=onset_env, sr=sr, units='frames',
+                backtrack=True, pre_max=3, post_max=3  # 感度向上
+            )
+            onset_set = set(onset_frames_detected.tolist())
+            total_frames = len(onset_env)
+            num_onsets = len(onset_frames_detected)
+            app_logger.debug(f"Detected {num_onsets} onsets in {total_frames} frames")
 
         octave_factor = 1.0  # オクターブ補正時に更新される
         phase_detect_bpm = None  # 位相検出用のBPM（オクターブ補正前）
@@ -2818,7 +2835,7 @@ def ping():
 def health():
     return {
         "status": "ok",
-        "build": "build-v5.6.4-trim-memory-short-cap",
+        "build": "build-v5.6.5-fast-render-analysis",
         "memory_mb": round(mem_mb(), 1),
         "active_jobs": sum(1 for j in jobs.values() if j.get("status") == "analyzing"),
         "env": {
