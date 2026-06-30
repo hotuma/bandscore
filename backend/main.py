@@ -174,6 +174,16 @@ def mem_mb():
     except:
         return 0
 
+def trim_memory():
+    import gc
+    gc.collect()
+    if sys.platform.startswith("linux"):
+        try:
+            import ctypes
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except Exception as e:
+            app_logger.debug(f"[Memory] malloc_trim unavailable: {e}")
+
 def cleanup_temp_dir(max_age_sec: int = 60 * 60 * 6):  # 6 hours
     now = time.time()
     for name in os.listdir(TEMP_DIR):
@@ -2808,7 +2818,7 @@ def ping():
 def health():
     return {
         "status": "ok",
-        "build": "build-v5.6.3-sync-upload-routes",
+        "build": "build-v5.6.4-trim-memory-short-cap",
         "memory_mb": round(mem_mb(), 1),
         "active_jobs": sum(1 for j in jobs.values() if j.get("status") == "analyzing"),
         "env": {
@@ -2914,8 +2924,7 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
             return
 
     # Force garbage collection before starting new job (free memory from previous jobs)
-    import gc
-    gc.collect()
+    trim_memory()
     app_logger.info("[GC] Forced garbage collection before new job")
 
     # Initial memory check (Render free tier: 512MB limit)
@@ -3004,7 +3013,7 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
     try:
         # --- Mode Enforcement ---
         # 1. Preview Hardcap
-        render_safe_cap_sec = float(os.getenv("RENDER_SAFE_MAX_ANALYSIS_SEC", "60"))
+        render_safe_cap_sec = float(os.getenv("RENDER_SAFE_MAX_ANALYSIS_SEC", "15"))
         if mode == AnalyzeMode.PREVIEW:
              # Force 60s hardcap (ignore environment or input)
              MAX_ANALYSIS_SEC = min(60.0, render_safe_cap_sec)
@@ -3152,17 +3161,35 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
             # If we got significantly less audio than requested, we hit EOF
             if actual_dur < (dur - 0.5) or actual_dur <= 0.1:
                 offset += actual_dur
+                try:
+                    del raw, chunk_bars, chunk_beat_times
+                except Exception:
+                    pass
+                trim_memory()
                 break
 
-            # Memory check after each chunk (Render free tier: 512MB limit)
+            offset += actual_dur
+            chunk_idx += 1
+            is_final_chunk = actual_dur < (dur - 0.5) or actual_dur <= 0.1 or offset >= MAX_ANALYSIS_SEC
+
+            # Release per-chunk temporaries before checking RSS. NumPy/librosa may hold
+            # freed arenas until malloc_trim runs on Linux.
+            try:
+                del raw, chunk_bars, chunk_beat_times
+            except Exception:
+                pass
+            trim_memory()
+
+            # Memory check after each non-final chunk (Render free tier: 512MB limit)
             try:
                 process = psutil.Process()
                 mem_percent = process.memory_percent()
                 mem_mb = process.memory_info().rss / 1024 / 1024
                 app_logger.info(f"[Memory] After chunk {chunk_idx}: {mem_mb:.1f}MB ({mem_percent:.1f}%)")
 
-                # Fail gracefully if memory is critical (>90% or >450MB)
-                if mem_percent > 90 or mem_mb > 450:
+                # Fail gracefully if another chunk would be unsafe. If this was the
+                # final chunk, prefer returning a partial result over discarding work.
+                if not is_final_chunk and (mem_percent > 90 or mem_mb > 450):
                     error_msg = f"Memory limit reached: {mem_mb:.1f}MB used. Try a shorter audio file."
                     app_logger.error(f"[OOM] {error_msg}")
                     jobs[job_id] = {
@@ -3175,12 +3202,8 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
             except Exception as mem_e:
                 app_logger.warning(f"[Memory] Could not check memory: {mem_e}")
 
-            # Force garbage collection after each chunk to free memory
-            import gc
-            gc.collect()
-
-            offset += dur
-            chunk_idx += 1
+            if is_final_chunk:
+                break
 
 
         # key matches majority vote across all chunks
