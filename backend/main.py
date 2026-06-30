@@ -2801,14 +2801,14 @@ def read_root():
     return {"message": "BandScore API is running"}
 
 @app.post("/ping")
-async def ping():
+def ping():
     return {"ok": True}
 
 @app.get("/health")
 def health():
     return {
         "status": "ok",
-        "build": "build-v5.6.2-render-safe-cap",
+        "build": "build-v5.6.3-sync-upload-routes",
         "memory_mb": round(mem_mb(), 1),
         "active_jobs": sum(1 for j in jobs.values() if j.get("status") == "analyzing"),
         "env": {
@@ -3315,7 +3315,7 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
 
 
 @app.post("/analyze")
-async def analyze(
+def analyze(
     mode: Optional[AnalyzeMode] = Form(None), # Require explicit mode in future, allow None for fallback now
     file: UploadFile = File(...), 
     background_tasks: BackgroundTasks = None
@@ -3329,19 +3329,19 @@ async def analyze(
     # in real world, we check user session/subscription here.
     # if mode == AnalyzeMode.FULL and not is_paid_user(): raise 403
     
-    return await _process_analyze(file, mode)
+    return _process_analyze(file, mode)
 
 @app.post("/analyze/preview")
-async def analyze_preview(
+def analyze_preview(
     file: UploadFile = File(...), 
     background_tasks: BackgroundTasks = None
 ):
     print(f"[EP] entered /analyze/preview {file.filename} {file.content_type}")
     # Force PREVIEW mode, ignore client input
-    return await _process_analyze(file, AnalyzeMode.PREVIEW)
+    return _process_analyze(file, AnalyzeMode.PREVIEW)
 
 # Shared Logic
-async def _process_analyze(file: UploadFile, mode: AnalyzeMode):
+def _process_analyze(file: UploadFile, mode: AnalyzeMode):
     # 1. Validate File Size
     file.file.seek(0, os.SEEK_END)
     size = file.file.tell()
@@ -3382,7 +3382,7 @@ async def _process_analyze(file: UploadFile, mode: AnalyzeMode):
 
     try:
         file.file.seek(0)
-        await anyio.to_thread.run_sync(_save_upload_sync, file.file, file_path)
+        _save_upload_sync(file.file, file_path)
     except Exception as e:
         jobs.pop(job_id, None)
         app_logger.error(f"[UploadSave] Failed to save upload: {e}", exc_info=True)
