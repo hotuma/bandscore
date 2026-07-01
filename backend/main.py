@@ -107,6 +107,8 @@ import tempfile
 import os
 import shutil
 import math
+import json
+import sqlite3
 
 # リクエストサイズ制限を緩和
 from starlette.datastructures import UploadFile as StarletteUploadFile
@@ -231,6 +233,121 @@ app.add_middleware(
 # --- Job store (NEW) ---
 jobs: Dict[str, Dict[str, Any]] = {}
 JOB_TTL_SEC = 3600  # 1 hour
+JOB_DB_PATH = os.getenv("JOB_DB_PATH", os.path.join(TEMP_DIR, "jobs.sqlite3"))
+_job_db_lock = threading.Lock()
+
+def init_job_store():
+    os.makedirs(os.path.dirname(JOB_DB_PATH), exist_ok=True)
+    with sqlite3.connect(JOB_DB_PATH) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS analysis_jobs (
+                job_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                mode TEXT,
+                source TEXT,
+                progress REAL DEFAULT 0,
+                error TEXT,
+                result_json TEXT,
+                file_path TEXT,
+                submitted_at REAL,
+                started_at REAL,
+                updated_at REAL,
+                done_at REAL,
+                expires_at REAL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_analysis_jobs_expires ON analysis_jobs(expires_at)")
+
+def _job_to_row(job_id: str, job: Dict[str, Any]) -> tuple:
+    result = job.get("result")
+    result_json = json.dumps(result, ensure_ascii=False) if result is not None else None
+    return (
+        job_id,
+        str(job.get("status") or "pending"),
+        str(job.get("mode") or "") if job.get("mode") is not None else None,
+        str(job.get("source") or "") if job.get("source") is not None else None,
+        float(job.get("progress", 0.0) or 0.0),
+        job.get("error"),
+        result_json,
+        job.get("file_path"),
+        job.get("submitted_at"),
+        job.get("started_at"),
+        job.get("updated_at"),
+        job.get("done_at"),
+        job.get("expires_at"),
+    )
+
+def save_job(job_id: str):
+    job = jobs.get(job_id)
+    if not job:
+        return
+    try:
+        with _job_db_lock:
+            with sqlite3.connect(JOB_DB_PATH, timeout=10) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO analysis_jobs (
+                        job_id, status, mode, source, progress, error, result_json,
+                        file_path, submitted_at, started_at, updated_at, done_at, expires_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(job_id) DO UPDATE SET
+                        status=excluded.status,
+                        mode=excluded.mode,
+                        source=excluded.source,
+                        progress=excluded.progress,
+                        error=excluded.error,
+                        result_json=excluded.result_json,
+                        file_path=excluded.file_path,
+                        submitted_at=excluded.submitted_at,
+                        started_at=excluded.started_at,
+                        updated_at=excluded.updated_at,
+                        done_at=excluded.done_at,
+                        expires_at=excluded.expires_at
+                    """,
+                    _job_to_row(job_id, job),
+                )
+    except Exception as e:
+        app_logger.warning(f"[JobStore] Failed to save job {job_id}: {e}")
+
+def load_job(job_id: str) -> Dict[str, Any] | None:
+    try:
+        with _job_db_lock:
+            with sqlite3.connect(JOB_DB_PATH, timeout=10) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute("SELECT * FROM analysis_jobs WHERE job_id = ?", (job_id,)).fetchone()
+        if not row:
+            return None
+        job = dict(row)
+        result_json = job.pop("result_json", None)
+        if result_json:
+            job["result"] = json.loads(result_json)
+        job.pop("job_id", None)
+        return job
+    except Exception as e:
+        app_logger.warning(f"[JobStore] Failed to load job {job_id}: {e}")
+        return None
+
+def delete_job(job_id: str):
+    jobs.pop(job_id, None)
+    try:
+        with _job_db_lock:
+            with sqlite3.connect(JOB_DB_PATH, timeout=10) as conn:
+                conn.execute("DELETE FROM analysis_jobs WHERE job_id = ?", (job_id,))
+    except Exception as e:
+        app_logger.warning(f"[JobStore] Failed to delete job {job_id}: {e}")
+
+def upsert_job(job_id: str, updates: Dict[str, Any], persist: bool = True) -> Dict[str, Any]:
+    job = {**jobs.get(job_id, {}), **updates}
+    jobs[job_id] = job
+    if persist:
+        save_job(job_id)
+    return job
+
+init_job_store()
 
 def cleanup_jobs():
     now = time.time()
@@ -246,7 +363,13 @@ def cleanup_jobs():
     ]
     for jid in expired:
         app_logger.warning(f"[JobCleanup] Removing expired/stale job {jid}: {jobs.get(jid)}")
-        jobs.pop(jid, None)
+        delete_job(jid)
+    try:
+        with _job_db_lock:
+            with sqlite3.connect(JOB_DB_PATH, timeout=10) as conn:
+                conn.execute("DELETE FROM analysis_jobs WHERE expires_at IS NOT NULL AND expires_at < ?", (now,))
+    except Exception as e:
+        app_logger.warning(f"[JobCleanup] Failed to cleanup persisted jobs: {e}")
 
 def _save_upload_sync(src_fileobj, dst_path: str):
     os.makedirs(os.path.dirname(dst_path), exist_ok=True)
@@ -2835,9 +2958,13 @@ def ping():
 def health():
     return {
         "status": "ok",
-        "build": "build-v5.6.5-fast-render-analysis",
+        "build": "build-v5.7.0-persistent-job-store",
         "memory_mb": round(mem_mb(), 1),
         "active_jobs": sum(1 for j in jobs.values() if j.get("status") == "analyzing"),
+        "job_store": {
+            "backend": "sqlite",
+            "path": JOB_DB_PATH,
+        },
         "env": {
             "MAX_ANALYSIS_SEC": os.getenv("MAX_ANALYSIS_SEC", ""),
             "CHUNK_SEC": os.getenv("CHUNK_SEC", ""),
@@ -2933,11 +3060,10 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
                 raise RuntimeError("FFmpeg binary not found")
         except Exception as e:
             app_logger.error(f"FFmpeg check failed for MP3 processing: {e}")
-            jobs[job_id] = {
-                **jobs.get(job_id, {}),
+            upsert_job(job_id, {
                 "status": "error",
                 "error": "MP3 decoding is not available on this server. Please use WAV format or contact support."
-            }
+            })
             return
 
     # Force garbage collection before starting new job (free memory from previous jobs)
@@ -2953,12 +3079,11 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
         if initial_mem_mb > 450:
             error_msg = f"Server memory critically high ({initial_mem_mb:.1f}MB). Please try again in a few minutes."
             app_logger.error(f"[OOM-Precheck] {error_msg}")
-            jobs[job_id] = {
-                **jobs.get(job_id, {}),
+            upsert_job(job_id, {
                 "status": "error",
                 "error": error_msg,
                 "done_at": time.time()
-            }
+            })
             return
     except Exception as mem_e:
         app_logger.warning(f"[Memory] Could not check initial memory: {mem_e}")
@@ -2969,24 +3094,23 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
     if len(active_jobs) > 0:
         error_msg = f"Another analysis is in progress. Please wait for it to complete."
         app_logger.warning(f"[Concurrency] {len(active_jobs)} active job(s), rejecting new job")
-        jobs[job_id] = {
-            **jobs.get(job_id, {}),
+        upsert_job(job_id, {
             "status": "error",
             "error": error_msg,
             "done_at": time.time()
-        }
+        })
         return
 
     # Init progress (Store mode in job)
-    jobs[job_id] = {
-        **jobs.get(job_id, {}),
+    upsert_job(job_id, {
         "status": "analyzing",
         "mode": mode,
+        "source": source,
         # Use 0.01 (1%) as "Started" signal. 0.0 might be confused with "not started"
         "progress": 0.01,
         "updated_at": time.time(),
         "started_at": time.time()
-    }
+    })
 
     def update_progress(p: float):
         try:
@@ -3012,11 +3136,10 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
                 job = jobs.get(job_id)
                 if not job or job.get("status") != "analyzing":
                     return
-                jobs[job_id] = {
-                    **job,
+                upsert_job(job_id, {
                     "updated_at": time.time(),
                     "started_at": job.get("started_at", time.time()),
-                }
+                })
                 app_logger.debug(f"[Heartbeat] job {job_id} still analyzing at {job.get('progress', 0.0)}%")
             except Exception as e:
                 app_logger.warning(f"[Heartbeat] Failed for job {job_id}: {e}")
@@ -3209,12 +3332,11 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
                 if not is_final_chunk and (mem_percent > 90 or mem_mb > 450):
                     error_msg = f"Memory limit reached: {mem_mb:.1f}MB used. Try a shorter audio file."
                     app_logger.error(f"[OOM] {error_msg}")
-                    jobs[job_id] = {
-                        **jobs.get(job_id, {}),
+                    upsert_job(job_id, {
                         "status": "error",
                         "error": error_msg,
                         "done_at": time.time()
-                    }
+                    })
                     return
             except Exception as mem_e:
                 app_logger.warning(f"[Memory] Could not check memory: {mem_e}")
@@ -3324,24 +3446,24 @@ def run_analysis_bg(job_id: str, file_path: str, mode: AnalyzeMode = AnalyzeMode
         if source == "url" and os.path.exists(file_path):
             final_result["audio_url"] = "/temp/" + os.path.basename(file_path)
 
-        jobs[job_id] = {
-            **jobs.get(job_id, {}),
+        upsert_job(job_id, {
             "status": "done",
             "progress": 100.0,
+            "updated_at": time.time(),
             "done_at": time.time(),
             "result": final_result,
-        }
+        })
     except Exception as e:
         # Catch-all for thread safety
         app_logger.error(f"[run_analysis_bg] Analysis failed for job {job_id}: {e}", exc_info=True)
         import traceback
         traceback.print_exc()
-        jobs[job_id] = {
-            **jobs.get(job_id, {}),
+        upsert_job(job_id, {
             "status": "error",
+            "updated_at": time.time(),
             "done_at": time.time(),
             "error": str(e),
-        }
+        })
 
     finally:
         heartbeat_stop.set()
@@ -3408,13 +3530,15 @@ def _process_analyze(file: UploadFile, mode: AnalyzeMode):
     now = time.time()
 
     # Create job entry immediately (status="pending" until file is saved)
-    jobs[job_id] = {
+    upsert_job(job_id, {
         "status": "pending",
+        "mode": mode,
+        "source": "upload",
         "submitted_at": now,
         "expires_at": now + JOB_TTL_SEC,
         "progress": 0.0,
         "updated_at": now,
-    }
+    })
 
     # Use a unique name for TEMP storage
     safe_filename = f"{job_id}{ext}"
@@ -3424,18 +3548,19 @@ def _process_analyze(file: UploadFile, mode: AnalyzeMode):
         file.file.seek(0)
         _save_upload_sync(file.file, file_path)
     except Exception as e:
-        jobs.pop(job_id, None)
+        delete_job(job_id)
         app_logger.error(f"[UploadSave] Failed to save upload: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to save uploaded file: {e}")
 
-    jobs[job_id] = {
-        **jobs.get(job_id, {}),
+    upsert_job(job_id, {
         "status": "analyzing",
         "mode": mode,
+        "source": "upload",
+        "file_path": file_path,
         "progress": 5.0,
         "updated_at": time.time(),
         "started_at": time.time(),
-    }
+    })
 
     threading.Thread(
         target=run_analysis_bg,
@@ -3455,30 +3580,32 @@ def _save_and_analyze(job_id: str, file_content: bytes, file_path: str, mode: An
         del file_content
 
         # Update job status to "analyzing" with initial progress
-        jobs[job_id] = {
-            **jobs.get(job_id, {}),
+        upsert_job(job_id, {
             "status": "analyzing",
             "mode": mode,
+            "source": "upload",
+            "file_path": file_path,
             "progress": 5.0,  # 5% to show progress early (prevent frontend timeout)
             "updated_at": time.time(),
             "started_at": time.time()
-        }
+        })
 
         # Run analysis
         run_analysis_bg(job_id, file_path, mode)
     except Exception as e:
         app_logger.error(f"[SaveAndAnalyze] Failed: {e}", exc_info=True)
-        jobs[job_id] = {
-            **jobs.get(job_id, {}),
+        upsert_job(job_id, {
             "status": "error",
             "error": str(e),
             "done_at": time.time()
-        }
+        })
 
 @app.get("/analyze/status/{job_id}")
 def analyze_status(job_id: str):
     cleanup_jobs()
-    job = jobs.get(job_id)
+    job = jobs.get(job_id) or load_job(job_id)
+    if job:
+        jobs[job_id] = job
     if not job:
         raise HTTPException(status_code=404, detail="job not found")
     return {
@@ -3492,7 +3619,9 @@ def analyze_status(job_id: str):
 @app.get("/analyze/result/{job_id}")
 def analyze_result(job_id: str):
     cleanup_jobs()
-    job = jobs.get(job_id)
+    job = jobs.get(job_id) or load_job(job_id)
+    if job:
+        jobs[job_id] = job
     if not job:
         raise HTTPException(status_code=404, detail="job not found")
     if job.get("status") != "done":
@@ -3596,11 +3725,17 @@ async def _process_analyze_url(url: str, mode: AnalyzeMode, cookies: UploadFile 
         # Now create job
         job_id = str(uuid.uuid4())
         now = time.time()
-        jobs[job_id] = {
+        upsert_job(job_id, {
             "status": "analyzing",
+            "mode": mode,
+            "source": "url",
+            "file_path": file_path,
             "submitted_at": now,
             "expires_at": now + JOB_TTL_SEC,
-        }
+            "progress": 0.0,
+            "updated_at": now,
+            "started_at": now,
+        })
         
         # Threading for URL analysis too
         threading.Thread(target=run_analysis_bg, args=(job_id, file_path, mode, "url")).start()
