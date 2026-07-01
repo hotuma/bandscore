@@ -251,6 +251,9 @@ def init_job_store():
                 error TEXT,
                 result_json TEXT,
                 file_path TEXT,
+                storage_backend TEXT,
+                storage_key TEXT,
+                storage_url TEXT,
                 submitted_at REAL,
                 started_at REAL,
                 updated_at REAL,
@@ -259,6 +262,16 @@ def init_job_store():
             )
             """
         )
+        for column, col_type in (
+            ("storage_backend", "TEXT"),
+            ("storage_key", "TEXT"),
+            ("storage_url", "TEXT"),
+        ):
+            try:
+                conn.execute(f"ALTER TABLE analysis_jobs ADD COLUMN {column} {col_type}")
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" not in str(e).lower():
+                    raise
         conn.execute("CREATE INDEX IF NOT EXISTS idx_analysis_jobs_expires ON analysis_jobs(expires_at)")
 
 def _job_to_row(job_id: str, job: Dict[str, Any]) -> tuple:
@@ -273,6 +286,9 @@ def _job_to_row(job_id: str, job: Dict[str, Any]) -> tuple:
         job.get("error"),
         result_json,
         job.get("file_path"),
+        job.get("storage_backend"),
+        job.get("storage_key"),
+        job.get("storage_url"),
         job.get("submitted_at"),
         job.get("started_at"),
         job.get("updated_at"),
@@ -291,9 +307,10 @@ def save_job(job_id: str):
                     """
                     INSERT INTO analysis_jobs (
                         job_id, status, mode, source, progress, error, result_json,
-                        file_path, submitted_at, started_at, updated_at, done_at, expires_at
+                        file_path, storage_backend, storage_key, storage_url,
+                        submitted_at, started_at, updated_at, done_at, expires_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(job_id) DO UPDATE SET
                         status=excluded.status,
                         mode=excluded.mode,
@@ -302,6 +319,9 @@ def save_job(job_id: str):
                         error=excluded.error,
                         result_json=excluded.result_json,
                         file_path=excluded.file_path,
+                        storage_backend=excluded.storage_backend,
+                        storage_key=excluded.storage_key,
+                        storage_url=excluded.storage_url,
                         submitted_at=excluded.submitted_at,
                         started_at=excluded.started_at,
                         updated_at=excluded.updated_at,
@@ -375,6 +395,62 @@ def _save_upload_sync(src_fileobj, dst_path: str):
     os.makedirs(os.path.dirname(dst_path), exist_ok=True)
     with open(dst_path, "wb") as f:
         shutil.copyfileobj(src_fileobj, f, length=1024 * 1024)  # 1MB chunk
+
+def storage_enabled() -> bool:
+    return bool(os.getenv("STORAGE_BUCKET") and os.getenv("STORAGE_ENDPOINT_URL"))
+
+def storage_backend_name() -> str:
+    return os.getenv("STORAGE_BACKEND", "s3")
+
+def build_storage_key(job_id: str, filename: str, source: str = "upload") -> str:
+    safe_name = os.path.basename(filename or f"{job_id}.bin").replace("\\", "_").replace("/", "_")
+    return f"analysis-inputs/{source}/{job_id}/{safe_name}"
+
+def storage_public_url(key: str) -> str | None:
+    public_base = os.getenv("STORAGE_PUBLIC_BASE_URL", "").rstrip("/")
+    if public_base:
+        return f"{public_base}/{key}"
+    return None
+
+def upload_file_to_object_storage(local_path: str, key: str, content_type: str | None = None) -> dict[str, str] | None:
+    if not storage_enabled():
+        return None
+    try:
+        import boto3
+        from botocore.config import Config
+
+        endpoint_url = os.environ["STORAGE_ENDPOINT_URL"]
+        bucket = os.environ["STORAGE_BUCKET"]
+        access_key = os.getenv("STORAGE_ACCESS_KEY_ID")
+        secret_key = os.getenv("STORAGE_SECRET_ACCESS_KEY")
+        region = os.getenv("STORAGE_REGION", "auto")
+        if not access_key or not secret_key:
+            app_logger.warning("[Storage] STORAGE_ACCESS_KEY_ID/STORAGE_SECRET_ACCESS_KEY are not set")
+            return None
+
+        client = boto3.client(
+            "s3",
+            endpoint_url=endpoint_url,
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            region_name=region,
+            config=Config(signature_version="s3v4"),
+        )
+        extra_args = {}
+        if content_type:
+            extra_args["ContentType"] = content_type
+        client.upload_file(local_path, bucket, key, ExtraArgs=extra_args)
+        app_logger.info(f"[Storage] Uploaded {local_path} to {bucket}/{key}")
+        return {
+            "storage_backend": storage_backend_name(),
+            "storage_key": key,
+            "storage_url": storage_public_url(key),
+        }
+    except Exception as e:
+        app_logger.error(f"[Storage] Upload failed for {local_path}: {e}", exc_info=True)
+        if os.getenv("STORAGE_REQUIRED", "0").lower() in ("1", "true", "yes"):
+            raise
+        return None
 
 # --- Types ---
 
@@ -2958,12 +3034,19 @@ def ping():
 def health():
     return {
         "status": "ok",
-        "build": "build-v5.7.0-persistent-job-store",
+        "build": "build-v5.8.0-object-storage-inputs",
         "memory_mb": round(mem_mb(), 1),
         "active_jobs": sum(1 for j in jobs.values() if j.get("status") == "analyzing"),
         "job_store": {
             "backend": "sqlite",
             "path": JOB_DB_PATH,
+        },
+        "storage": {
+            "enabled": storage_enabled(),
+            "backend": storage_backend_name() if storage_enabled() else "local",
+            "bucket": os.getenv("STORAGE_BUCKET", ""),
+            "endpoint_configured": bool(os.getenv("STORAGE_ENDPOINT_URL")),
+            "public_base_configured": bool(os.getenv("STORAGE_PUBLIC_BASE_URL")),
         },
         "env": {
             "MAX_ANALYSIS_SEC": os.getenv("MAX_ANALYSIS_SEC", ""),
@@ -3552,11 +3635,18 @@ def _process_analyze(file: UploadFile, mode: AnalyzeMode):
         app_logger.error(f"[UploadSave] Failed to save upload: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to save uploaded file: {e}")
 
+    storage_info = upload_file_to_object_storage(
+        file_path,
+        build_storage_key(job_id, safe_filename, "upload"),
+        content_type=file.content_type,
+    ) or {}
+
     upsert_job(job_id, {
         "status": "analyzing",
         "mode": mode,
         "source": "upload",
         "file_path": file_path,
+        **storage_info,
         "progress": 5.0,
         "updated_at": time.time(),
         "started_at": time.time(),
@@ -3725,11 +3815,17 @@ async def _process_analyze_url(url: str, mode: AnalyzeMode, cookies: UploadFile 
         # Now create job
         job_id = str(uuid.uuid4())
         now = time.time()
+        storage_info = upload_file_to_object_storage(
+            file_path,
+            build_storage_key(job_id, os.path.basename(file_path), "url"),
+            content_type="audio/mpeg",
+        ) or {}
         upsert_job(job_id, {
             "status": "analyzing",
             "mode": mode,
             "source": "url",
             "file_path": file_path,
+            **storage_info,
             "submitted_at": now,
             "expires_at": now + JOB_TTL_SEC,
             "progress": 0.0,

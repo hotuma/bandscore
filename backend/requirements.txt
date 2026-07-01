@@ -11,3 +11,4 @@ scipy>=1.11.0
 soundfile
 yt-dlp
 psutil
+boto3

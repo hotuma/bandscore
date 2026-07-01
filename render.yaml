@@ -16,3 +16,5 @@ services:
         value: 1
       - key: ENABLE_LIBROSA_WARMUP
         value: 0
+      - key: STORAGE_BACKEND
+        value: r2
