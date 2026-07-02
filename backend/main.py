@@ -706,7 +706,11 @@ def download_file_from_object_storage(key: str, local_path: str) -> bool:
         return False
 
 def process_jobs_inline() -> bool:
-    return os.getenv("PROCESS_JOBS_INLINE", "1").lower() not in ("0", "false", "no")
+    inline = os.getenv("PROCESS_JOBS_INLINE", "1").lower() not in ("0", "false", "no")
+    if not inline and not DATABASE_URL and os.getenv("ALLOW_SQLITE_QUEUE", "0").lower() not in ("1", "true", "yes"):
+        app_logger.warning("[Worker] PROCESS_JOBS_INLINE=false ignored because DATABASE_URL is not configured")
+        return True
+    return inline
 
 # --- Types ---
 
