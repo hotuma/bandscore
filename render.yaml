@@ -3,6 +3,8 @@ services:
     name: bandscore-backend
     env: docker
     plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
     envVars:
       - key: PYTHON_VERSION
         value: 3.12
@@ -37,6 +39,8 @@ services:
     name: bandscore-worker
     env: docker
     plan: starter
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
     dockerCommand: python worker.py
     envVars:
       - key: PYTHON_VERSION
