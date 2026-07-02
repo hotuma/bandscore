@@ -277,10 +277,13 @@ def init_job_store():
 def _job_to_row(job_id: str, job: Dict[str, Any]) -> tuple:
     result = job.get("result")
     result_json = json.dumps(result, ensure_ascii=False) if result is not None else None
+    mode = job.get("mode")
+    if isinstance(mode, AnalyzeMode):
+        mode = mode.value
     return (
         job_id,
         str(job.get("status") or "pending"),
-        str(job.get("mode") or "") if job.get("mode") is not None else None,
+        str(mode or "") if mode is not None else None,
         str(job.get("source") or "") if job.get("source") is not None else None,
         float(job.get("progress", 0.0) or 0.0),
         job.get("error"),
@@ -367,6 +370,87 @@ def upsert_job(job_id: str, updates: Dict[str, Any], persist: bool = True) -> Di
         save_job(job_id)
     return job
 
+def get_next_queued_job() -> tuple[str, Dict[str, Any]] | None:
+    try:
+        now = time.time()
+        with _job_db_lock:
+            with sqlite3.connect(JOB_DB_PATH, timeout=10) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    """
+                    SELECT job_id FROM analysis_jobs
+                    WHERE status = 'queued'
+                    ORDER BY submitted_at ASC
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if not row:
+                    return None
+                job_id = row["job_id"]
+                result = conn.execute(
+                    """
+                    UPDATE analysis_jobs
+                    SET status = 'analyzing', started_at = ?, updated_at = ?
+                    WHERE job_id = ? AND status = 'queued'
+                    """,
+                    (now, now, job_id),
+                )
+                if result.rowcount != 1:
+                    return None
+        job = load_job(job_id)
+        if not job:
+            return None
+        jobs[job_id] = job
+        return job_id, job
+    except Exception as e:
+        app_logger.warning(f"[JobStore] Failed to get queued job: {e}")
+        return None
+
+def local_path_for_storage_key(job_id: str, job: Dict[str, Any]) -> str:
+    key = job.get("storage_key") or f"{job_id}.bin"
+    ext = os.path.splitext(key)[1] or ".bin"
+    return os.path.join(TEMP_DIR, f"{job_id}{ext}")
+
+def ensure_job_input_file(job_id: str, job: Dict[str, Any]) -> str | None:
+    file_path = job.get("file_path")
+    if file_path and os.path.exists(file_path):
+        return file_path
+
+    storage_key = job.get("storage_key")
+    if not storage_key:
+        return file_path
+
+    local_path = local_path_for_storage_key(job_id, job)
+    if download_file_from_object_storage(storage_key, local_path):
+        upsert_job(job_id, {"file_path": local_path})
+        return local_path
+    return None
+
+def process_queued_job(job_id: str, job: Dict[str, Any] | None = None):
+    job = job or load_job(job_id)
+    if not job:
+        app_logger.warning(f"[Worker] Job {job_id} not found")
+        return
+
+    file_path = ensure_job_input_file(job_id, job)
+    if not file_path:
+        upsert_job(job_id, {
+            "status": "error",
+            "error": "Queued job input file is unavailable",
+            "updated_at": time.time(),
+            "done_at": time.time(),
+        })
+        return
+
+    mode_value = job.get("mode") or AnalyzeMode.EARLY_ACCESS.value
+    if isinstance(mode_value, AnalyzeMode):
+        mode = mode_value
+    else:
+        mode_text = str(mode_value).replace("AnalyzeMode.", "")
+        mode = AnalyzeMode(mode_text)
+    source = job.get("source") or "upload"
+    run_analysis_bg(job_id, file_path, mode, source)
+
 init_job_store()
 
 def cleanup_jobs():
@@ -451,6 +535,41 @@ def upload_file_to_object_storage(local_path: str, key: str, content_type: str |
         if os.getenv("STORAGE_REQUIRED", "0").lower() in ("1", "true", "yes"):
             raise
         return None
+
+def download_file_from_object_storage(key: str, local_path: str) -> bool:
+    if not storage_enabled():
+        return False
+    try:
+        import boto3
+        from botocore.config import Config
+
+        endpoint_url = os.environ["STORAGE_ENDPOINT_URL"]
+        bucket = os.environ["STORAGE_BUCKET"]
+        access_key = os.getenv("STORAGE_ACCESS_KEY_ID")
+        secret_key = os.getenv("STORAGE_SECRET_ACCESS_KEY")
+        region = os.getenv("STORAGE_REGION", "auto")
+        if not access_key or not secret_key:
+            app_logger.warning("[Storage] STORAGE_ACCESS_KEY_ID/STORAGE_SECRET_ACCESS_KEY are not set")
+            return False
+
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        client = boto3.client(
+            "s3",
+            endpoint_url=endpoint_url,
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            region_name=region,
+            config=Config(signature_version="s3v4"),
+        )
+        client.download_file(bucket, key, local_path)
+        app_logger.info(f"[Storage] Downloaded {bucket}/{key} to {local_path}")
+        return True
+    except Exception as e:
+        app_logger.error(f"[Storage] Download failed for {key}: {e}", exc_info=True)
+        return False
+
+def process_jobs_inline() -> bool:
+    return os.getenv("PROCESS_JOBS_INLINE", "1").lower() not in ("0", "false", "no")
 
 # --- Types ---
 
@@ -3034,7 +3153,7 @@ def ping():
 def health():
     return {
         "status": "ok",
-        "build": "build-v5.8.0-object-storage-inputs",
+        "build": "build-v5.9.0-worker-queue",
         "memory_mb": round(mem_mb(), 1),
         "active_jobs": sum(1 for j in jobs.values() if j.get("status") == "analyzing"),
         "job_store": {
@@ -3048,6 +3167,9 @@ def health():
             "endpoint_configured": bool(os.getenv("STORAGE_ENDPOINT_URL")),
             "public_base_configured": bool(os.getenv("STORAGE_PUBLIC_BASE_URL")),
         },
+        "worker": {
+            "process_jobs_inline": process_jobs_inline(),
+        },
         "env": {
             "MAX_ANALYSIS_SEC": os.getenv("MAX_ANALYSIS_SEC", ""),
             "CHUNK_SEC": os.getenv("CHUNK_SEC", ""),
@@ -3055,6 +3177,7 @@ def health():
             "LOW_MEMORY_CHROMA": os.getenv("LOW_MEMORY_CHROMA", ""),
             "ENABLE_LIBROSA_WARMUP": os.getenv("ENABLE_LIBROSA_WARMUP", ""),
             "RENDER_SAFE_MAX_ANALYSIS_SEC": os.getenv("RENDER_SAFE_MAX_ANALYSIS_SEC", ""),
+            "PROCESS_JOBS_INLINE": os.getenv("PROCESS_JOBS_INLINE", ""),
         },
     }
 
@@ -3641,22 +3764,24 @@ def _process_analyze(file: UploadFile, mode: AnalyzeMode):
         content_type=file.content_type,
     ) or {}
 
+    should_process_inline = process_jobs_inline()
     upsert_job(job_id, {
-        "status": "analyzing",
+        "status": "analyzing" if should_process_inline else "queued",
         "mode": mode,
         "source": "upload",
         "file_path": file_path,
         **storage_info,
-        "progress": 5.0,
+        "progress": 5.0 if should_process_inline else 0.0,
         "updated_at": time.time(),
-        "started_at": time.time(),
+        "started_at": time.time() if should_process_inline else None,
     })
 
-    threading.Thread(
-        target=run_analysis_bg,
-        args=(job_id, file_path, mode),
-        daemon=True
-    ).start()
+    if should_process_inline:
+        threading.Thread(
+            target=run_analysis_bg,
+            args=(job_id, file_path, mode),
+            daemon=True
+        ).start()
 
     return JSONResponse(status_code=202, content={"job_id": job_id})
 
@@ -3693,7 +3818,7 @@ def _save_and_analyze(job_id: str, file_content: bytes, file_path: str, mode: An
 @app.get("/analyze/status/{job_id}")
 def analyze_status(job_id: str):
     cleanup_jobs()
-    job = jobs.get(job_id) or load_job(job_id)
+    job = load_job(job_id) or jobs.get(job_id)
     if job:
         jobs[job_id] = job
     if not job:
@@ -3709,7 +3834,7 @@ def analyze_status(job_id: str):
 @app.get("/analyze/result/{job_id}")
 def analyze_result(job_id: str):
     cleanup_jobs()
-    job = jobs.get(job_id) or load_job(job_id)
+    job = load_job(job_id) or jobs.get(job_id)
     if job:
         jobs[job_id] = job
     if not job:
@@ -3820,8 +3945,9 @@ async def _process_analyze_url(url: str, mode: AnalyzeMode, cookies: UploadFile 
             build_storage_key(job_id, os.path.basename(file_path), "url"),
             content_type="audio/mpeg",
         ) or {}
+        should_process_inline = process_jobs_inline()
         upsert_job(job_id, {
-            "status": "analyzing",
+            "status": "analyzing" if should_process_inline else "queued",
             "mode": mode,
             "source": "url",
             "file_path": file_path,
@@ -3830,11 +3956,11 @@ async def _process_analyze_url(url: str, mode: AnalyzeMode, cookies: UploadFile 
             "expires_at": now + JOB_TTL_SEC,
             "progress": 0.0,
             "updated_at": now,
-            "started_at": now,
+            "started_at": now if should_process_inline else None,
         })
         
-        # Threading for URL analysis too
-        threading.Thread(target=run_analysis_bg, args=(job_id, file_path, mode, "url")).start()
+        if should_process_inline:
+            threading.Thread(target=run_analysis_bg, args=(job_id, file_path, mode, "url")).start()
 
         return JSONResponse(status_code=202, content={"job_id": job_id})
 
