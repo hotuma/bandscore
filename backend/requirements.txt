@@ -12,3 +12,4 @@ soundfile
 yt-dlp
 psutil
 boto3
+psycopg[binary]

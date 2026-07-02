@@ -234,9 +234,50 @@ app.add_middleware(
 jobs: Dict[str, Dict[str, Any]] = {}
 JOB_TTL_SEC = 3600  # 1 hour
 JOB_DB_PATH = os.getenv("JOB_DB_PATH", os.path.join(TEMP_DIR, "jobs.sqlite3"))
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 _job_db_lock = threading.Lock()
 
+def job_store_backend() -> str:
+    return "postgres" if DATABASE_URL else "sqlite"
+
+def _connect_postgres():
+    import psycopg
+    return psycopg.connect(DATABASE_URL)
+
 def init_job_store():
+    if job_store_backend() == "postgres":
+        try:
+            with _connect_postgres() as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS analysis_jobs (
+                        job_id TEXT PRIMARY KEY,
+                        status TEXT NOT NULL,
+                        mode TEXT,
+                        source TEXT,
+                        progress DOUBLE PRECISION DEFAULT 0,
+                        error TEXT,
+                        result_json TEXT,
+                        file_path TEXT,
+                        storage_backend TEXT,
+                        storage_key TEXT,
+                        storage_url TEXT,
+                        submitted_at DOUBLE PRECISION,
+                        started_at DOUBLE PRECISION,
+                        updated_at DOUBLE PRECISION,
+                        done_at DOUBLE PRECISION,
+                        expires_at DOUBLE PRECISION
+                    )
+                    """
+                )
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_analysis_jobs_expires ON analysis_jobs(expires_at)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_analysis_jobs_status_submitted ON analysis_jobs(status, submitted_at)")
+            app_logger.info("[JobStore] Using postgres")
+            return
+        except Exception as e:
+            app_logger.error(f"[JobStore] Failed to initialize postgres store: {e}", exc_info=True)
+            raise
+
     os.makedirs(os.path.dirname(JOB_DB_PATH), exist_ok=True)
     with sqlite3.connect(JOB_DB_PATH) as conn:
         conn.execute("PRAGMA journal_mode=WAL")
@@ -304,6 +345,37 @@ def save_job(job_id: str):
     if not job:
         return
     try:
+        if job_store_backend() == "postgres":
+            with _connect_postgres() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO analysis_jobs (
+                        job_id, status, mode, source, progress, error, result_json,
+                        file_path, storage_backend, storage_key, storage_url,
+                        submitted_at, started_at, updated_at, done_at, expires_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(job_id) DO UPDATE SET
+                        status=excluded.status,
+                        mode=excluded.mode,
+                        source=excluded.source,
+                        progress=excluded.progress,
+                        error=excluded.error,
+                        result_json=excluded.result_json,
+                        file_path=excluded.file_path,
+                        storage_backend=excluded.storage_backend,
+                        storage_key=excluded.storage_key,
+                        storage_url=excluded.storage_url,
+                        submitted_at=excluded.submitted_at,
+                        started_at=excluded.started_at,
+                        updated_at=excluded.updated_at,
+                        done_at=excluded.done_at,
+                        expires_at=excluded.expires_at
+                    """,
+                    _job_to_row(job_id, job),
+                )
+            return
+
         with _job_db_lock:
             with sqlite3.connect(JOB_DB_PATH, timeout=10) as conn:
                 conn.execute(
@@ -338,6 +410,32 @@ def save_job(job_id: str):
 
 def load_job(job_id: str) -> Dict[str, Any] | None:
     try:
+        if job_store_backend() == "postgres":
+            with _connect_postgres() as conn:
+                row = conn.execute(
+                    """
+                    SELECT job_id, status, mode, source, progress, error, result_json,
+                           file_path, storage_backend, storage_key, storage_url,
+                           submitted_at, started_at, updated_at, done_at, expires_at
+                    FROM analysis_jobs
+                    WHERE job_id = %s
+                    """,
+                    (job_id,),
+                ).fetchone()
+            if not row:
+                return None
+            columns = [
+                "job_id", "status", "mode", "source", "progress", "error", "result_json",
+                "file_path", "storage_backend", "storage_key", "storage_url",
+                "submitted_at", "started_at", "updated_at", "done_at", "expires_at",
+            ]
+            job = dict(zip(columns, row))
+            result_json = job.pop("result_json", None)
+            if result_json:
+                job["result"] = json.loads(result_json)
+            job.pop("job_id", None)
+            return job
+
         with _job_db_lock:
             with sqlite3.connect(JOB_DB_PATH, timeout=10) as conn:
                 conn.row_factory = sqlite3.Row
@@ -357,6 +455,11 @@ def load_job(job_id: str) -> Dict[str, Any] | None:
 def delete_job(job_id: str):
     jobs.pop(job_id, None)
     try:
+        if job_store_backend() == "postgres":
+            with _connect_postgres() as conn:
+                conn.execute("DELETE FROM analysis_jobs WHERE job_id = %s", (job_id,))
+            return
+
         with _job_db_lock:
             with sqlite3.connect(JOB_DB_PATH, timeout=10) as conn:
                 conn.execute("DELETE FROM analysis_jobs WHERE job_id = ?", (job_id,))
@@ -373,6 +476,35 @@ def upsert_job(job_id: str, updates: Dict[str, Any], persist: bool = True) -> Di
 def get_next_queued_job() -> tuple[str, Dict[str, Any]] | None:
     try:
         now = time.time()
+        if job_store_backend() == "postgres":
+            with _connect_postgres() as conn:
+                with conn.transaction():
+                    row = conn.execute(
+                        """
+                        SELECT job_id FROM analysis_jobs
+                        WHERE status = 'queued'
+                        ORDER BY submitted_at ASC
+                        LIMIT 1
+                        FOR UPDATE SKIP LOCKED
+                        """
+                    ).fetchone()
+                    if not row:
+                        return None
+                    job_id = row[0]
+                    conn.execute(
+                        """
+                        UPDATE analysis_jobs
+                        SET status = 'analyzing', started_at = %s, updated_at = %s
+                        WHERE job_id = %s AND status = 'queued'
+                        """,
+                        (now, now, job_id),
+                    )
+            job = load_job(job_id)
+            if not job:
+                return None
+            jobs[job_id] = job
+            return job_id, job
+
         with _job_db_lock:
             with sqlite3.connect(JOB_DB_PATH, timeout=10) as conn:
                 conn.row_factory = sqlite3.Row
@@ -469,6 +601,11 @@ def cleanup_jobs():
         app_logger.warning(f"[JobCleanup] Removing expired/stale job {jid}: {jobs.get(jid)}")
         delete_job(jid)
     try:
+        if job_store_backend() == "postgres":
+            with _connect_postgres() as conn:
+                conn.execute("DELETE FROM analysis_jobs WHERE expires_at IS NOT NULL AND expires_at < %s", (now,))
+            return
+
         with _job_db_lock:
             with sqlite3.connect(JOB_DB_PATH, timeout=10) as conn:
                 conn.execute("DELETE FROM analysis_jobs WHERE expires_at IS NOT NULL AND expires_at < ?", (now,))
@@ -3153,12 +3290,13 @@ def ping():
 def health():
     return {
         "status": "ok",
-        "build": "build-v5.9.0-worker-queue",
+        "build": "build-v5.10.0-postgres-job-store",
         "memory_mb": round(mem_mb(), 1),
         "active_jobs": sum(1 for j in jobs.values() if j.get("status") == "analyzing"),
         "job_store": {
-            "backend": "sqlite",
-            "path": JOB_DB_PATH,
+            "backend": job_store_backend(),
+            "path": JOB_DB_PATH if job_store_backend() == "sqlite" else "",
+            "database_url_configured": bool(DATABASE_URL),
         },
         "storage": {
             "enabled": storage_enabled(),
